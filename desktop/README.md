@@ -1,0 +1,87 @@
+# PearGuard Windows Child Client
+
+Electron desktop child client for PearGuard. Runs the same P2P backend
+(`src/bare.js`) as the mobile app but inside Electron's Node.js main process,
+with the existing React UI (`src/ui/`) loaded in the renderer.
+
+## Phase 1 scope (current)
+
+- Electron scaffold with main + renderer
+- BareKit shim that lets the unmodified `src/bare.js` run in Node.js
+- IPC bridge: renderer `window.callBare` -> main -> bare dispatch
+- Existing `assets/app-ui.bundle` loaded directly by the renderer
+
+## Dev setup
+
+First, build the UI bundle from the project root:
+
+```
+cd ..
+npm run build:ui
+```
+
+Then install Electron deps and start:
+
+```
+cd windows
+npm install
+npm start
+```
+
+On first run Electron downloads native prebuilds for `sodium-native`,
+`hypercore`, `hyperswarm`, etc. If any native module fails to load after an
+Electron upgrade, run `npm run rebuild`.
+
+### Scripts
+
+- `npm start` - production launch (Windows target)
+- `npm run start:dev-linux` - Linux dev launch with sandbox/GPU disabled
+  (Fedora Wayland's chrome-sandbox and GPU process don't play nice with Electron)
+- `npm run build` - electron-builder, Windows target (NSIS installer)
+- `npm run build:linux` - electron-builder, Linux targets (AppImage + deb)
+- `npm run smoke` - headless bare-dispatch smoke test against `smoke.html`
+- `npm run smoke:ui` - headless boot check that loads the real `app-ui.bundle`
+  and dumps the rendered DOM to stdout
+
+## Linux packaging
+
+`npm run build:linux` produces an AppImage and a .deb in `dist/`. The AppImage
+self-mounts on launch and uses electron-updater for in-place upgrades from
+GitHub releases. The .deb installs to `/opt/PearGuard/` and registers a
+desktop entry; autostart is handled by a `~/.config/autostart/pearguard.desktop`
+file the app writes on first launch.
+
+For enforcement features (foreground monitor, blocking overlay), the runtime
+depends on `xprop` and `xwininfo` (X11). These ship in most desktop distros by
+default but are listed in the .deb's recommends; on Wayland sessions the
+foreground monitor will fail to read window state and enforcement degrades
+gracefully to "off".
+
+## Architecture
+
+```
+┌─────────────────────────────┐
+│  Renderer (src/ui/)         │
+│  - window.callBare()        │
+│  - window.onBareEvent()     │
+└──────┬──────────────────────┘
+       │ ipcRenderer.invoke('bare-call')
+       v
+┌─────────────────────────────┐
+│  Main process               │
+│  - ipcMain.handle           │
+│  - BareKit shim (IPC pipe)  │
+│  - require('src/bare.js')   │  <-- unmodified mobile bare worklet
+└─────────────────────────────┘
+```
+
+The BareKit shim provides `global.BareKit.IPC.write` and `.on('data')` as
+EventEmitters before `src/bare.js` loads, so the mobile bare worklet runs
+unchanged inside Electron's Node.js runtime.
+
+## Not yet implemented (future phases)
+
+- Child UI adaptations for desktop (Phase 2)
+- Foreground window monitor + blocking overlay (Phase 3)
+- NSIS installer, scheduled task, URL protocol (Phase 4)
+- Watchdog, schedule enforcement, bypass detection (Phase 5)

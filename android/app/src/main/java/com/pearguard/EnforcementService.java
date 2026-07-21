@@ -1,0 +1,774 @@
+package com.pearguard;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageStatsManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.text.TextUtils;
+
+import org.json.JSONArray;
+
+import androidx.core.app.NotificationCompat;
+
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.ReactContext;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.Calendar;
+import java.util.HashSet;
+import java.util.Set;
+
+public class EnforcementService extends Service {
+
+    private static final String CHANNEL_ID = "pearguard_enforcement";
+    private static final int NOTIFICATION_ID = 1000;
+    private static final long POLL_INTERVAL_MS = 5_000;       // 5 seconds
+    private static final long USAGE_FLUSH_INTERVAL_MS = 300_000; // 5 minutes
+    private static final long RECONNECT_EMIT_INTERVAL_MS = 30_000; // 30 seconds
+    private static final String WARNING_CHANNEL_ID = "pearguard_upcoming_warning";
+    private static final int[] DEFAULT_WARNING_THRESHOLDS_MIN = {10, 5, 1};
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private long lastUsageFlushTime = 0;
+    private long lastReconnectEmitTime = 0;
+    private boolean lastAccessibilityState = true;
+    // Consecutive ticks where the service reads as ENABLED in settings but its
+    // process is not connected (AppBlockerModule.isServiceConnected() == false).
+    // Requires a run of stalled ticks before alerting so the normal reconnect lag
+    // after a process/boot restart doesn't cry wolf. 3 ticks x 5s poll ~= 15s.
+    private int accessibilityStalledTicks = 0;
+    private static final int ACCESSIBILITY_STALL_ALERT_TICKS = 3;
+    private boolean accessibilityStallAlerted = false;
+    private final Set<String> shownWarnings = new HashSet<>();
+    private int lastWarningDayOfYear = -1;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private BroadcastReceiver clockChangeReceiver;
+    // A wall-clock jump larger than this, beyond what elapsedRealtime accounts for,
+    // is treated as a manual time change. Generous enough to ignore NTP corrections
+    // (seconds) while catching the hours-scale shifts needed to defeat a daily limit.
+    private static final long CLOCK_TAMPER_THRESHOLD_MS = 120_000; // 2 minutes
+
+    // --- Lifecycle ---
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        createNotificationChannel();
+        createWarningNotificationChannel();
+        startForeground(NOTIFICATION_ID, buildNotification());
+        lastAccessibilityState = isAccessibilityServiceEnabled();
+        registerNetworkCallback();
+        anchorClock();
+        seedTimezoneBaseline();
+        registerClockChangeReceiver();
+        handler.post(enforcementLoop);
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // START_STICKY: if the service is killed, the OS restarts it
+        return START_STICKY;
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public void onDestroy() {
+        handler.removeCallbacks(enforcementLoop);
+        unregisterNetworkCallback();
+        unregisterClockChangeReceiver();
+        super.onDestroy();
+    }
+
+    // --- Enforcement loop ---
+
+    private final Runnable enforcementLoop = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                writeEnforcementHeartbeat();
+                checkAccessibilityService();
+                checkForegroundEnforcement();
+                checkWarningNotifications();
+                maybeFlushUsageStats();
+                maybeEmitReconnectNeeded();
+            } catch (Exception ignored) {
+            } finally {
+                handler.postDelayed(this, POLL_INTERVAL_MS);
+            }
+        }
+    };
+
+    /**
+     * Writes the current timestamp to SharedPreferences on every loop tick.
+     * When PearGuard is force-stopped, onDestroy() is never called so this
+     * timestamp goes stale, allowing startup detection of a force-stop event.
+     */
+    private void writeEnforcementHeartbeat() {
+        getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+            .edit()
+            .putLong("enforcement_heartbeat_ms", System.currentTimeMillis())
+            .apply();
+    }
+
+    /**
+     * Periodically ask the Bare worklet to re-announce its Hyperswarm topics
+     * so the child stays discoverable after network drops/switches (WiFi loss,
+     * cellular handoff) that happen without the app being foregrounded.
+     * Complements the immediate emit from NetworkCallback.onAvailable as a
+     * safety net (callbacks can miss transitions on some OEMs / VPN setups).
+     */
+    private void maybeEmitReconnectNeeded() {
+        long now = System.currentTimeMillis();
+        if (now - lastReconnectEmitTime < RECONNECT_EMIT_INTERVAL_MS) return;
+        lastReconnectEmitTime = now;
+        emitReconnectNeeded();
+    }
+
+    private void emitReconnectNeeded() {
+        ReactContext ctx = PearGuardReactHost.get();
+        if (ctx == null || !ctx.hasActiveReactInstance()) return;
+        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+           .emit("onChildReconnectNeeded", null);
+    }
+
+    /**
+     * Listen for default-network changes (WiFi -> cellular, network regained
+     * after loss). onAvailable fires immediately when a new default network
+     * is ready, which is the right moment to re-announce to the DHT — the TCP
+     * connections Hyperswarm was holding are already dead at that point.
+     */
+    private void registerNetworkCallback() {
+        try {
+            connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (connectivityManager == null) return;
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(Network network) {
+                    emitReconnectNeeded();
+                }
+            };
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void unregisterNetworkCallback() {
+        try {
+            if (connectivityManager != null && networkCallback != null) {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            networkCallback = null;
+        }
+    }
+
+    /**
+     * Checks whether the PearGuard Accessibility Service is both enabled AND
+     * actually enforcing.
+     *
+     * Two distinct failure modes are caught:
+     *   1. enabled → disabled: the child turned the service off. Reported once as
+     *      "accessibility_disabled".
+     *   2. enabled-but-not-connected: the service reads as enabled in settings,
+     *      but its process is gone (OS-reclaimed, not disabled), so blocking
+     *      silently no-ops. isAccessibilityServiceEnabled() can't see this — only
+     *      the live sInstance can. Reported as "accessibility_not_connected" after
+     *      a short grace so the normal reconnect lag after a restart doesn't
+     *      falsely accuse. Cleared once the service reconnects.
+     */
+    private void checkAccessibilityService() {
+        boolean isEnabled = isAccessibilityServiceEnabled();
+
+        if (lastAccessibilityState && !isEnabled) {
+            // Just became disabled — reportBypass persists to SharedPreferences so
+            // the next app launch can relay it even if the RN JS thread is suspended.
+            reportBypass("accessibility_disabled");
+        }
+
+        // Enabled-but-not-connected blind spot: settings say enabled but the
+        // service object isn't there to enforce. Only meaningful while enabled —
+        // a genuinely disabled service is already handled above.
+        if (isEnabled && !AppBlockerModule.isServiceConnected()) {
+            accessibilityStalledTicks++;
+            if (accessibilityStalledTicks >= ACCESSIBILITY_STALL_ALERT_TICKS
+                    && !accessibilityStallAlerted) {
+                accessibilityStallAlerted = true;
+                reportBypass("accessibility_not_connected");
+            }
+        } else {
+            // Connected (or disabled) — reset so a later stall alerts again.
+            accessibilityStalledTicks = 0;
+            accessibilityStallAlerted = false;
+        }
+
+        lastAccessibilityState = isEnabled;
+    }
+
+    // --- Clock-tamper detection ---
+
+    /**
+     * Store a fresh (wall clock, elapsedRealtime) anchor. elapsedRealtime is
+     * monotonic and immune to wall-clock changes, and both advance together during
+     * deep sleep, so normal operation never produces drift. Comparing the two deltas
+     * after an android.intent.action.TIME_SET reveals a manual clock change.
+     */
+    private void anchorClock() {
+        getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+            .edit()
+            .putLong("clock_anchor_wall", System.currentTimeMillis())
+            .putLong("clock_anchor_elapsed", SystemClock.elapsedRealtime())
+            .apply();
+    }
+
+    /**
+     * TIME_SET cannot be declared in the manifest on Android 8+ (implicit-broadcast
+     * restrictions), so it is registered at runtime here in the long-running service.
+     */
+    private void registerClockChangeReceiver() {
+        if (clockChangeReceiver != null) return;
+        clockChangeReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                if (action == null) return;
+
+                if (Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
+                    // Epoch time is unchanged by a timezone switch, but the local-day
+                    // boundary used by daily limits and schedules shifts, so a manual
+                    // change is a genuine evasion vector. Two things make this fire
+                    // spuriously, so we filter them out:
+                    //   1) The broadcast often lands with the zone unchanged. Only warn
+                    //      when the zone ID actually moved.
+                    //   2) An automatic NITZ zone update (network hand-off / travel) is
+                    //      not tampering. A manual zone change requires "Set time zone
+                    //      automatically" to be OFF, so we suppress while it is ON.
+                    // Real manual travel-simulation turns auto-zone off, so it is still
+                    // reported — the parent decides.
+                    boolean zoneChanged = timezoneChanged();
+                    if (zoneChanged && !isAutoTimeZoneEnabled()) {
+                        reportBypass("timezone_changed");
+                    }
+                    anchorClock();
+                    return;
+                }
+
+                // Intent.ACTION_TIME_CHANGED == "android.intent.action.TIME_SET"
+                SharedPreferences prefs = getSharedPreferences("PearGuardPrefs", MODE_PRIVATE);
+                long anchorWall = prefs.getLong("clock_anchor_wall", 0L);
+                long anchorElapsed = prefs.getLong("clock_anchor_elapsed", 0L);
+                long nowWall = System.currentTimeMillis();
+                long nowElapsed = SystemClock.elapsedRealtime();
+                anchorClock(); // re-anchor immediately so later checks measure from here
+
+                if (anchorWall == 0L || anchorElapsed == 0L) return; // no baseline yet
+                long drift = (nowWall - anchorWall) - (nowElapsed - anchorElapsed);
+                if (Math.abs(drift) <= CLOCK_TAMPER_THRESHOLD_MS) return; // within NTP/NITZ tolerance
+                // A manual clock change requires "Set time automatically" to be OFF —
+                // with it ON the clock is under NITZ/NTP control and the manual option
+                // is greyed out, so a large jump is a legitimate network sync. A large
+                // jump while auto-time is OFF is a manual change: the bypass. This
+                // replaces the old "recent network change" grace, which a child defeated
+                // by toggling WiFi and then changing the clock within 90 seconds.
+                if (isAutoTimeEnabled()) return;
+                reportBypass("clock_changed");
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_TIME_CHANGED);
+        filter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+        registerReceiver(clockChangeReceiver, filter);
+    }
+
+    private void unregisterClockChangeReceiver() {
+        if (clockChangeReceiver != null) {
+            try { unregisterReceiver(clockChangeReceiver); } catch (Exception ignored) {}
+            clockChangeReceiver = null;
+        }
+    }
+
+    /**
+     * True when the system clock is set automatically (NITZ/NTP). A manual time
+     * change requires this to be OFF, so an automatic-clock device that sees a
+     * large jump is syncing, not being tampered with. Fails safe to true (assume
+     * automatic) if the setting can't be read, to avoid falsely accusing the child.
+     */
+    private boolean isAutoTimeEnabled() {
+        try {
+            return Settings.Global.getInt(getContentResolver(), Settings.Global.AUTO_TIME, 1) == 1;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    /** Same idea as isAutoTimeEnabled but for the timezone (AUTO_TIME_ZONE). */
+    private boolean isAutoTimeZoneEnabled() {
+        try {
+            return Settings.Global.getInt(getContentResolver(), Settings.Global.AUTO_TIME_ZONE, 1) == 1;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    /** Records the current timezone ID so the first genuine change is detectable. */
+    private void seedTimezoneBaseline() {
+        getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+            .edit()
+            .putString("last_timezone_id", java.util.TimeZone.getDefault().getID())
+            .apply();
+    }
+
+    /**
+     * True only when the device timezone ID actually differs from the last one we
+     * recorded, updating the stored value. Many ACTION_TIMEZONE_CHANGED broadcasts
+     * fire with an unchanged zone; those return false and raise no warning.
+     */
+    private boolean timezoneChanged() {
+        SharedPreferences prefs = getSharedPreferences("PearGuardPrefs", MODE_PRIVATE);
+        String current = java.util.TimeZone.getDefault().getID();
+        String last = prefs.getString("last_timezone_id", null);
+        prefs.edit().putString("last_timezone_id", current).apply();
+        return last != null && !last.equals(current);
+    }
+
+    /**
+     * Persist + notify + relay a bypass detection, mirroring checkAccessibilityService
+     * so it survives a suspended JS thread (the reason is replayed on next launch).
+     */
+    private void reportBypass(String reason) {
+        getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+            .edit()
+            .putString("bypass_detected_reason", reason)
+            .putLong("bypass_detected_at", System.currentTimeMillis())
+            .apply();
+
+        AppBlockerModule.showBypassNotification(this);
+
+        ReactContext reactContext = PearGuardReactHost.get();
+        if (reactContext != null && reactContext.hasActiveReactInstance()) {
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit("onBypassDetected", reason);
+        }
+    }
+
+    /**
+     * Every 60 seconds: if RN bridge is active, emit onUsageFlush so the
+     * bare worklet can send a full usage report to parents.
+     * If bridge is dead, collect stats natively and queue for later delivery.
+     */
+    private void maybeFlushUsageStats() {
+        long now = System.currentTimeMillis();
+        if (now - lastUsageFlushTime < USAGE_FLUSH_INTERVAL_MS) return;
+        lastUsageFlushTime = now;
+
+        ReactContext reactContext = PearGuardReactHost.get();
+        if (reactContext != null && reactContext.hasActiveReactInstance()) {
+            WritableMap params = Arguments.createMap();
+            params.putDouble("timestamp", now);
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit("onUsageFlush", params);
+            // Record flush time so WorkManager only wakes the app when data is stale
+            getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+                .edit()
+                .putLong("last_usage_flush_ms", now)
+                .apply();
+        } else {
+            // RN bridge is dead — collect usage natively and queue
+            JSONArray usage = UsageStatsModule.collectDailyUsageNative(this);
+            if (usage.length() > 0) {
+                UsageQueueHelper.enqueue(this, usage);
+            }
+        }
+    }
+
+    /**
+     * Checks whether the current foreground app is blocked and shows the overlay if so.
+     * AppBlockerModule tracks the last foreground package via onAccessibilityEvent, so
+     * this works regardless of how long the app has been open (#66).
+     */
+    private void checkForegroundEnforcement() {
+        AppBlockerModule.checkAndShowOverlayIfNeeded();
+    }
+
+    private boolean isAccessibilityServiceEnabled() {
+        String prefString;
+        try {
+            prefString = Settings.Secure.getString(
+                getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            );
+        } catch (Exception e) {
+            return false;
+        }
+
+        if (TextUtils.isEmpty(prefString)) return false;
+
+        // Check if our accessibility service is in the enabled list
+        String ourService = getPackageName() + "/" + AppBlockerModule.class.getName();
+        TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
+        splitter.setString(prefString);
+        while (splitter.hasNext()) {
+            if (splitter.next().equalsIgnoreCase(ourService)) return true;
+        }
+        return false;
+    }
+
+    // --- Upcoming warning notifications ---
+
+    private void checkWarningNotifications() {
+        int today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR);
+        if (today != lastWarningDayOfYear) {
+            shownWarnings.clear();
+            lastWarningDayOfYear = today;
+        }
+
+        JSONObject policy = loadPolicyFromPrefs();
+        if (policy == null) return;
+
+        checkScheduleWarnings(policy);
+        checkTimeLimitWarnings(policy);
+        checkScreenTimeWarnings(policy);
+    }
+
+    private int[] getWarningThresholds(JSONObject policy) {
+        try {
+            JSONObject settings = policy.optJSONObject("settings");
+            if (settings != null) {
+                org.json.JSONArray arr = settings.optJSONArray("warningMinutes");
+                if (arr != null && arr.length() > 0) {
+                    int[] thresholds = new int[arr.length()];
+                    for (int i = 0; i < arr.length(); i++) thresholds[i] = arr.getInt(i);
+                    return thresholds;
+                }
+            }
+        } catch (Exception ignored) {}
+        return DEFAULT_WARNING_THRESHOLDS_MIN;
+    }
+
+    private JSONObject loadPolicyFromPrefs() {
+        try {
+            String json = getSharedPreferences("PearGuardPrefs", MODE_PRIVATE)
+                .getString("pearguard_policy", null);
+            return json != null ? new JSONObject(json) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void checkScheduleWarnings(JSONObject policy) {
+        try {
+            JSONArray schedules = policy.optJSONArray("schedules");
+            if (schedules == null) return;
+
+            Calendar now = Calendar.getInstance();
+            int dayOfWeek = now.get(Calendar.DAY_OF_WEEK) - 1; // 0=Sunday
+            int nowSeconds = (now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)) * 60
+                    + now.get(Calendar.SECOND);
+
+            for (int i = 0; i < schedules.length(); i++) {
+                JSONObject schedule = schedules.getJSONObject(i);
+                JSONArray days = schedule.getJSONArray("days");
+
+                boolean dayMatches = false;
+                for (int d = 0; d < days.length(); d++) {
+                    if (days.getInt(d) == dayOfWeek) { dayMatches = true; break; }
+                }
+                if (!dayMatches) continue;
+
+                String[] startParts = schedule.getString("start").split(":");
+                int startSeconds = (Integer.parseInt(startParts[0]) * 60
+                        + Integer.parseInt(startParts[1])) * 60;
+
+                int secondsUntil = startSeconds - nowSeconds;
+                if (secondsUntil < 0) secondsUntil += 24 * 3600;
+
+                if (secondsUntil <= 0) continue;
+
+                String label = schedule.optString("label", "Scheduled block");
+
+                int[] thresholds = getWarningThresholds(policy);
+                // Skip if we're further out than the largest threshold + 1 min
+                if (thresholds.length > 0 && secondsUntil > (thresholds[0] + 1) * 60) continue;
+                for (int t = 0; t < thresholds.length; t++) {
+                    int threshMin = thresholds[t];
+                    int threshSec = threshMin * 60;
+                    if (secondsUntil <= threshSec && secondsUntil > threshSec - 6) {
+                        String dedupKey = "sched:" + i + ":" + threshMin;
+                        if (shownWarnings.add(dedupKey)) {
+                            int notifId = 2000 + i * 10 + t;
+                            showWarningNotification(notifId,
+                                label + " starts in " + threshMin
+                                    + " minute" + (threshMin > 1 ? "s" : ""),
+                                "Apps will be restricted when \""
+                                    + label + "\" begins.");
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void checkTimeLimitWarnings(JSONObject policy) {
+        try {
+            String foregroundPkg = AppBlockerModule.getLastForegroundPackage();
+            if (foregroundPkg == null) return;
+
+            JSONObject apps = policy.optJSONObject("apps");
+            if (apps == null || !apps.has(foregroundPkg)) return;
+
+            JSONObject appPolicy = apps.getJSONObject(foregroundPkg);
+            int limitSeconds = appPolicy.optInt("dailyLimitSeconds", -1);
+            if (limitSeconds <= 0) return;
+
+            int usedSeconds = getDailyUsageSeconds(foregroundPkg);
+            int remainingSeconds = limitSeconds - usedSeconds;
+            if (remainingSeconds <= 0) return;
+
+            String appName = appPolicy.optString("appName", foregroundPkg);
+
+            int[] thresholds = getWarningThresholds(policy);
+            for (int t = 0; t < thresholds.length; t++) {
+                int threshMin = thresholds[t];
+                int threshSec = threshMin * 60;
+                if (remainingSeconds <= threshSec && remainingSeconds > threshSec - 6) {
+                    String dedupKey = "limit:" + foregroundPkg + ":" + threshMin;
+                    if (shownWarnings.add(dedupKey)) {
+                        int notifId = 3000
+                                + (foregroundPkg.hashCode() & 0x7FFFFFFF) % 900 + t;
+                        showWarningNotification(notifId,
+                            appName + ": " + threshMin
+                                + " minute" + (threshMin > 1 ? "s" : "")
+                                + " remaining",
+                            "Your daily limit for " + appName + " is almost up.");
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void checkScreenTimeWarnings(JSONObject policy) {
+        try {
+            // Folds in any general-time grant (#179) so the countdown reflects the
+            // budget actually being enforced.
+            int limitSeconds = AppBlockerModule.effectiveScreenTimeLimitSeconds(this, policy);
+            if (limitSeconds <= 0) return;
+
+            // Only nudge while the child is actively using a non-exempt app —
+            // no point warning when nothing is on screen.
+            String foregroundPkg = AppBlockerModule.getLastForegroundPackage();
+            if (foregroundPkg == null) return;
+            if (foregroundPkg.equals(getPackageName())) return;
+            if (PhoneAppHelper.isPhoneOrMessagingApp(this, foregroundPkg)) return;
+            // An exempt app doesn't spend the budget, so a countdown would be noise.
+            if (AppBlockerModule.isScreenTimeExempt(policy, foregroundPkg)) return;
+
+            int usedSeconds = getTotalDailyUsageSeconds(policy);
+            int remainingSeconds = limitSeconds - usedSeconds;
+            if (remainingSeconds <= 0) return;
+
+            int[] thresholds = getWarningThresholds(policy);
+            for (int t = 0; t < thresholds.length; t++) {
+                int threshMin = thresholds[t];
+                int threshSec = threshMin * 60;
+                if (remainingSeconds <= threshSec && remainingSeconds > threshSec - 6) {
+                    String dedupKey = "screentime:" + threshMin;
+                    if (shownWarnings.add(dedupKey)) {
+                        int notifId = 4000 + t;
+                        showWarningNotification(notifId,
+                            "Screen time: " + threshMin
+                                + " minute" + (threshMin > 1 ? "s" : "") + " left",
+                            "Your daily screen time limit is almost up.");
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Total foreground screen time in seconds across all non-exempt packages
+     * today, in a single event scan. Mirrors AppBlockerModule's exemptions
+     * (PearGuard itself, phone/messaging, and the parent's screenTimeExemptApps)
+     * so the warning total tracks the value the block decision uses.
+     */
+    private int getTotalDailyUsageSeconds(JSONObject policy) {
+        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+        if (usm == null) return 0;
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long startOfDay = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+        // Hoisted out of the event loop — the scan can see thousands of events.
+        Set<String> screenTimeExempt = new HashSet<>();
+        if (policy != null) {
+            JSONArray arr = policy.optJSONArray("screenTimeExemptApps");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) screenTimeExempt.add(arr.optString(i));
+            }
+        }
+        try {
+            UsageEvents events = usm.queryEvents(startOfDay, now);
+            if (events == null) return 0;
+            UsageEvents.Event event = new UsageEvents.Event();
+            java.util.Map<String, Long> sessionStart = new java.util.HashMap<>();
+            long totalMs = 0;
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event);
+                String pkg = event.getPackageName();
+                if (pkg == null) continue;
+                if (pkg.equals(getPackageName())) continue;
+                if (PhoneAppHelper.isPhoneOrMessagingApp(this, pkg)) continue;
+                if (screenTimeExempt.contains(pkg)) continue;
+                if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                    sessionStart.put(pkg, event.getTimeStamp());
+                } else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                    Long start = sessionStart.remove(pkg);
+                    if (start != null) totalMs += event.getTimeStamp() - start;
+                }
+            }
+            for (Long start : sessionStart.values()) {
+                if (start != null) totalMs += now - start;
+            }
+            return (int)(totalMs / 1000);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int getDailyUsageSeconds(String packageName) {
+        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+        if (usm == null) return 0;
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long startOfDay = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+        try {
+            UsageEvents events = usm.queryEvents(startOfDay, now);
+            if (events == null) return 0;
+            UsageEvents.Event event = new UsageEvents.Event();
+            long totalMs = 0;
+            long sessionStart = -1;
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event);
+                if (!packageName.equals(event.getPackageName())) continue;
+                if (event.getEventType() == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                    sessionStart = event.getTimeStamp();
+                } else if (event.getEventType() == UsageEvents.Event.MOVE_TO_BACKGROUND
+                        && sessionStart >= 0) {
+                    totalMs += event.getTimeStamp() - sessionStart;
+                    sessionStart = -1;
+                }
+            }
+            if (sessionStart >= 0) totalMs += now - sessionStart;
+            return (int) (totalMs / 1000);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void showWarningNotification(int notificationId, String title, String body) {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+
+        PendingIntent pi = null;
+        try {
+            Intent openApp = new Intent(this, Class.forName("com.pearguard.MainActivity"));
+            pi = PendingIntent.getActivity(this, notificationId, openApp,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        } catch (ClassNotFoundException ignored) {}
+
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(this, WARNING_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setTimeoutAfter(5 * 60 * 1000);
+
+        if (pi != null) builder.setContentIntent(pi);
+        nm.notify(notificationId, builder.build());
+    }
+
+    private void createWarningNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                WARNING_CHANNEL_ID,
+                "Upcoming Limit Warnings",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Warnings before schedule blocks or time limits");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(channel);
+        }
+    }
+
+    // --- Foreground notification ---
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "PearGuard Active",
+                NotificationManager.IMPORTANCE_LOW
+            );
+            channel.setDescription("PearGuard parental controls are running");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(channel);
+        }
+    }
+
+    private Notification buildNotification() {
+        PendingIntent pi = null;
+        try {
+            Intent openApp = new Intent(this, Class.forName("com.pearguard.MainActivity"));
+            pi = PendingIntent.getActivity(
+                this, 0, openApp,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        } catch (ClassNotFoundException e) {
+            // Notification will have no tap action — not a crash condition
+        }
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("PearGuard is active")
+            .setContentText("Parental controls are running")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true);
+
+        if (pi != null) builder.setContentIntent(pi);
+        return builder.build();
+    }
+}

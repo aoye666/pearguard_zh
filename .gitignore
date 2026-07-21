@@ -1,0 +1,22 @@
+node_modules/
+TODO.md
+DONE.md
+scripts/.env
+.expo/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+# Android build artifacts only — source files are tracked
+android/build/
+android/.gradle/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+# iOS build artifacts only — source files are tracked
+ios/Pods/
+ios/build/
+worktrees/
+/docs/superpowers/plans/2026-03-19-pearguard-plan1-foundation.md
+/docs/superpowers/plans/2026-03-19-pearguard-plan2-native-enforcement.md
+/docs/superpowers/plans/2026-03-19-pearguard-plan3-parent-ui.md
+/docs/superpowers/plans/2026-03-19-pearguard-plan4-child-ui-policy.md

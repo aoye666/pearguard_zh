@@ -1,0 +1,842 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { t } from '../locales/index.js';
+import { createPortal } from 'react-dom';
+import { useTheme } from '../theme.js';
+import Icon from '../icons.js';
+import { APP_CATEGORIES, CATEGORY_COLORS } from './appCategories.js';
+import PresetModal from './PresetModal.jsx';
+
+const DAY_LABELS = [t('rules.sun'), t('rules.mon'), t('rules.tue'), t('rules.wed'), t('rules.thu'), t('rules.fri'), t('rules.sat')];
+
+const BLANK_RULE = { label: '', days: [], start: '21:00', end: '07:00', exemptApps: [] };
+
+// Shared by the schedule rule editor and the screen-time exempt picker.
+function groupAppsByCategory(policy) {
+  const grouped = {};
+  let total = 0;
+  if (policy && policy.apps) {
+    for (const [pkg, data] of Object.entries(policy.apps)) {
+      const name = data.appName || pkg;
+      const cat = data.category || 'Other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push({ packageName: pkg, appName: name });
+      total++;
+    }
+    for (const cat of Object.keys(grouped)) {
+      grouped[cat].sort((a, b) => a.appName.localeCompare(b.appName));
+    }
+  }
+  return { appsByCategory: grouped, totalAppCount: total };
+}
+
+function ExemptCategoryGroup({ categoryName, apps, exemptSet, onToggle, onSelectAll, onClear, expanded, onToggleExpanded, colors, typography, spacing, radius }) {
+  const color = CATEGORY_COLORS[categoryName] || '#aaa';
+  const selectedCount = apps.reduce((n, a) => n + (exemptSet.has(a.packageName) ? 1 : 0), 0);
+  const allSelected = selectedCount === apps.length;
+
+  return (
+    <div style={{ marginBottom: `${spacing.xs}px` }}>
+      <button
+        type="button"
+        onClick={() => { window.callBare('haptic:tap'); onToggleExpanded(); }}
+        aria-expanded={expanded}
+        aria-label={`${categoryName} category, ${selectedCount} of ${apps.length} exempt`}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: `${spacing.sm}px`,
+          padding: `8px ${spacing.sm}px`,
+          background: colors.surface.elevated,
+          border: `1px solid ${colors.border}`,
+          borderLeft: `4px solid ${color}`,
+          borderRadius: `${radius.md}px`,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ flex: 1, ...typography.caption, fontWeight: '600', color: colors.text.primary }}>{categoryName}</span>
+        <span style={{ ...typography.caption, color: selectedCount > 0 ? colors.primary : colors.text.muted, fontWeight: selectedCount > 0 ? '600' : '400' }}>
+          {selectedCount}/{apps.length}
+        </span>
+        <span style={{ fontSize: '16px', color: colors.text.muted, lineHeight: 1 }}>{expanded ? '⌄' : '›'}</span>
+      </button>
+      {expanded && (
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: `${spacing.xs}px`,
+          padding: `${spacing.sm}px`,
+        }}>
+          <div style={{ display: 'flex', gap: `${spacing.xs}px` }}>
+            <button
+              type="button"
+              onClick={() => { window.callBare('haptic:tap'); onSelectAll(); }}
+              disabled={allSelected}
+              style={{
+                ...typography.caption,
+                padding: `2px ${spacing.sm}px`,
+                border: `1px solid ${colors.border}`,
+                borderRadius: `${radius.sm}px`,
+                background: 'transparent',
+                color: allSelected ? colors.text.muted : colors.primary,
+                cursor: allSelected ? 'default' : 'pointer',
+              }}
+            >
+              {t('common.selectAll')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { window.callBare('haptic:tap'); onClear(); }}
+              disabled={selectedCount === 0}
+              style={{
+                ...typography.caption,
+                padding: `2px ${spacing.sm}px`,
+                border: `1px solid ${colors.border}`,
+                borderRadius: `${radius.sm}px`,
+                background: 'transparent',
+                color: selectedCount === 0 ? colors.text.muted : colors.text.secondary,
+                cursor: selectedCount === 0 ? 'default' : 'pointer',
+              }}
+            >
+              {t('common.clear')}
+            </button>
+          </div>
+          {apps.map(({ packageName, appName }) => (
+            <label key={packageName} style={{ display: 'flex', alignItems: 'center', gap: `${spacing.sm}px`, ...typography.caption, color: colors.text.primary, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={exemptSet.has(packageName)}
+                onChange={() => onToggle(packageName)}
+                aria-label={`Exempt ${appName}`}
+              />
+              {appName}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuleRow({ rule, onEdit, onDelete, colors, typography, spacing, radius }) {
+  const activeDays = DAY_LABELS.filter((_, i) => rule.days.includes(i)).join(', ');
+  const exemptCount = (rule.exemptApps || []).length;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: `${spacing.sm}px`,
+      padding: `${spacing.sm}px 0`, borderBottom: `1px solid ${colors.divider}`,
+    }}>
+      <div style={{ flex: 1 }}>
+        <span style={{ ...typography.body, fontWeight: '600', display: 'block', color: colors.text.primary }}>
+          {rule.label || t('rules.noLabel')}
+        </span>
+        <span style={{ ...typography.caption, color: colors.text.secondary }}>
+          {activeDays || t('rules.noDays')} &bull; {rule.start}&ndash;{rule.end}
+        </span>
+        {exemptCount > 0 && (
+          <span style={{ ...typography.caption, color: colors.primary, display: 'block', marginTop: '2px' }}>
+            {exemptCount} {t('rules.exemptApp', { count: exemptCount })}
+          </span>
+        )}
+      </div>
+      <button
+        onClick={onEdit}
+        aria-label={`Edit rule ${rule.label}`}
+        style={{
+          padding: `${spacing.xs}px ${spacing.sm}px`,
+          border: `1px solid ${colors.primary}`,
+          borderRadius: `${radius.md}px`,
+          color: colors.primary,
+          background: 'transparent',
+          cursor: 'pointer',
+          ...typography.caption,
+        }}
+      >
+        {t('common.edit')}
+      </button>
+      <button
+        onClick={onDelete}
+        aria-label={`${t('common.delete')} ${rule.label}`}
+        style={{
+          padding: `${spacing.xs}px ${spacing.sm}px`,
+          border: `1px solid ${colors.error}`,
+          borderRadius: `${radius.md}px`,
+          color: colors.error,
+          background: 'transparent',
+          cursor: 'pointer',
+          ...typography.caption,
+        }}
+      >
+        {t('common.delete')}
+      </button>
+    </div>
+  );
+}
+
+function ScreenTimeSection({ policy, setPolicy, childPublicKey, colors, typography, spacing, radius }) {
+  const savedSeconds = policy && typeof policy.dailyScreenTimeLimitSeconds === 'number'
+    ? policy.dailyScreenTimeLimitSeconds
+    : null;
+  const [minutes, setMinutes] = useState(savedSeconds ? String(Math.round(savedSeconds / 60)) : '');
+  const [showInfo, setShowInfo] = useState(false);
+  const [showExempt, setShowExempt] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState({});
+
+  const { appsByCategory, totalAppCount } = useMemo(() => groupAppsByCategory(policy), [policy]);
+  const exemptApps = useMemo(
+    () => (policy && Array.isArray(policy.screenTimeExemptApps) ? policy.screenTimeExemptApps : []),
+    [policy]
+  );
+  const exemptSet = useMemo(() => new Set(exemptApps), [exemptApps]);
+
+  // Resync the field when the policy changes underneath us (e.g. another device edited it).
+  useEffect(() => {
+    setMinutes(savedSeconds ? String(Math.round(savedSeconds / 60)) : '');
+  }, [savedSeconds]);
+
+  function saveExempt(next) {
+    const updated = { ...policy, screenTimeExemptApps: next };
+    setPolicy(updated);
+    window.callBare('policy:update', { childPublicKey, policy: updated });
+  }
+
+  function toggleExemptApp(packageName) {
+    saveExempt(
+      exemptSet.has(packageName)
+        ? exemptApps.filter((p) => p !== packageName)
+        : [...exemptApps, packageName]
+    );
+  }
+
+  function selectAllInCategory(categoryName) {
+    const set = new Set(exemptApps);
+    for (const a of appsByCategory[categoryName] || []) set.add(a.packageName);
+    saveExempt(Array.from(set));
+  }
+
+  function clearCategory(categoryName) {
+    const pkgs = new Set((appsByCategory[categoryName] || []).map((a) => a.packageName));
+    saveExempt(exemptApps.filter((p) => !pkgs.has(p)));
+  }
+
+  function save(nextMinutes) {
+    const trimmed = nextMinutes.trim();
+    const updated = { ...policy };
+    if (trimmed === '') {
+      delete updated.dailyScreenTimeLimitSeconds;
+    } else {
+      const mins = parseInt(trimmed, 10);
+      if (isNaN(mins) || mins <= 0) {
+        delete updated.dailyScreenTimeLimitSeconds;
+      } else {
+        updated.dailyScreenTimeLimitSeconds = mins * 60;
+      }
+    }
+    // Skip the round-trip when nothing actually changed.
+    const prev = typeof policy.dailyScreenTimeLimitSeconds === 'number' ? policy.dailyScreenTimeLimitSeconds : undefined;
+    const next = updated.dailyScreenTimeLimitSeconds;
+    if (prev === next) return;
+    setPolicy(updated);
+    window.callBare('policy:update', { childPublicKey, policy: updated });
+  }
+
+  // Width matches the "Add Rule" button below (icon + label + horizontal
+  // padding) so the two centered controls line up.
+  const inputStyle = {
+    padding: `${spacing.sm}px ${spacing.base}px`,
+    border: `1px solid ${colors.border}`,
+    borderRadius: `${radius.md}px`,
+    fontSize: '14px',
+    background: colors.surface.input,
+    color: colors.text.primary,
+    width: '130px',
+    textAlign: 'center',
+    boxSizing: 'border-box',
+  };
+
+  return (
+    <div style={{ marginBottom: `${spacing.xl}px` }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: `${spacing.xs}px`, marginBottom: `${spacing.sm}px` }}>
+        <h3 style={{ ...typography.subheading, fontWeight: '600', color: colors.text.primary, margin: 0 }}>
+          {t('rules.dailyScreenTimeLimit')}
+        </h3>
+        <button
+          onClick={() => { window.callBare('haptic:tap'); setShowInfo((v) => !v); }}
+          aria-label={t('rules.aboutScreenTimeLimit')}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: `${spacing.xs}px`, display: 'flex', alignItems: 'center' }}
+        >
+          <Icon name="Info" size={16} color={colors.text.muted} />
+        </button>
+      </div>
+      {showInfo && (
+        <p style={{ ...typography.caption, color: colors.text.secondary, marginBottom: `${spacing.base}px`, lineHeight: '1.4', padding: `${spacing.sm}px`, background: colors.surface.elevated, borderRadius: `${radius.md}px` }}>
+          {t('rules.screenTimeInfo')}
+        </p>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: `${spacing.xs}px` }}>
+        <input
+          type="number"
+          inputMode="numeric"
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          onBlur={(e) => save(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+          placeholder="&#8734;"
+          aria-label={t('rules.dailyScreenTimeAria')}
+          style={inputStyle}
+          min="1"
+        />
+        <span style={{ ...typography.caption, color: colors.text.secondary }}>{t('apps.minPerDay')}</span>
+      </div>
+
+      {/* Always visible, but exemptions only mean something once a cap is set
+          and the child has reported apps to choose from. */}
+      {(() => {
+        const hint = savedSeconds > 0
+          ? (totalAppCount > 0 ? null : t('rules.noAppsYet'))
+          : t('rules.setLimitFirst');
+        const disabled = hint !== null;
+        const expanded = showExempt && !disabled;
+        return (
+        <div style={{ marginTop: `${spacing.base}px` }}>
+          <button
+            type="button"
+            onClick={() => { window.callBare('haptic:tap'); setShowExempt((v) => !v); }}
+            disabled={disabled}
+            aria-expanded={expanded}
+            aria-label={disabled ? t('rules.exemptAppsUnavailable', { hint }) : t('rules.exemptApps')}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: `${spacing.sm}px`,
+              padding: `${spacing.sm}px ${spacing.base}px`,
+              background: colors.surface.elevated,
+              border: `1px solid ${colors.border}`,
+              // Accent bar echoes the category rows below, and turns green to
+              // signal "this list is doing something" at a glance.
+              borderLeft: `4px solid ${!disabled && exemptApps.length > 0 ? colors.primary : colors.border}`,
+              borderRadius: `${radius.md}px`,
+              cursor: disabled ? 'default' : 'pointer',
+              textAlign: 'left',
+              opacity: disabled ? 0.6 : 1,
+            }}
+          >
+            <span style={{ flex: 1, ...typography.body, fontWeight: '600', color: disabled ? colors.text.muted : colors.text.primary }}>
+              {t('rules.exemptApps')}
+            </span>
+            <span style={{ ...typography.caption, color: !disabled && exemptApps.length > 0 ? colors.primary : colors.text.muted, fontWeight: !disabled && exemptApps.length > 0 ? '600' : '400' }}>
+              {disabled ? hint : (exemptApps.length > 0 ? `${exemptApps.length} ${t('rules.exempt')}` : t('rules.none'))}
+            </span>
+            <span style={{ fontSize: '18px', color: disabled ? colors.text.muted : colors.text.secondary, lineHeight: 1 }}>{expanded ? '⌄' : '›'}</span>
+          </button>
+          {expanded && (
+            <div style={{ marginTop: `${spacing.sm}px` }}>
+              <p style={{ ...typography.caption, color: colors.text.secondary, marginBottom: `${spacing.sm}px`, lineHeight: '1.4' }}>
+                {t('rules.exemptAppsInfo')}
+              </p>
+              {Object.keys(appsByCategory).sort().map((cat) => (
+                <ExemptCategoryGroup
+                  key={cat}
+                  categoryName={cat}
+                  apps={appsByCategory[cat]}
+                  exemptSet={exemptSet}
+                  onToggle={toggleExemptApp}
+                  onSelectAll={() => selectAllInCategory(cat)}
+                  onClear={() => clearCategory(cat)}
+                  expanded={!!expandedCategories[cat]}
+                  onToggleExpanded={() => setExpandedCategories((p) => ({ ...p, [cat]: !p[cat] }))}
+                  colors={colors}
+                  typography={typography}
+                  spacing={spacing}
+                  radius={radius}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function ScheduleSection({ policy, setPolicy, childPublicKey, footerEl, colors, typography, spacing, radius }) {
+  const [newRule, setNewRule] = useState(BLANK_RULE);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState({});
+
+  const { appsByCategory, totalAppCount } = useMemo(() => groupAppsByCategory(policy), [policy]);
+
+  function saveSchedules(schedules) {
+    const updated = { ...policy, schedules };
+    setPolicy(updated);
+    window.callBare('policy:update', { childPublicKey, policy: updated });
+  }
+
+  function handleDeleteRule(index) {
+    const schedules = policy.schedules.filter((_, i) => i !== index);
+    saveSchedules(schedules);
+  }
+
+  function handleEditRule(index) {
+    const rule = policy.schedules[index];
+    const exempt = rule.exemptApps || [];
+    setEditingIndex(index);
+    setNewRule({ ...rule, exemptApps: exempt });
+    setSubmitAttempted(false);
+    setShowForm(true);
+    const exemptSet = new Set(exempt);
+    const expanded = {};
+    for (const cat of Object.keys(appsByCategory)) {
+      if (appsByCategory[cat].some((a) => exemptSet.has(a.packageName))) expanded[cat] = true;
+    }
+    setExpandedCategories(expanded);
+  }
+
+  function handleCancelEdit() {
+    setEditingIndex(null);
+    setNewRule(BLANK_RULE);
+    setSubmitAttempted(false);
+    setShowForm(false);
+    setExpandedCategories({});
+  }
+
+  function handleSaveRule() {
+    setSubmitAttempted(true);
+    if (!newRule.label.trim() || newRule.days.length === 0) return;
+    let schedules;
+    if (editingIndex !== null) {
+      schedules = policy.schedules.map((r, i) => i === editingIndex ? newRule : r);
+    } else {
+      schedules = [...(policy.schedules || []), newRule];
+    }
+    saveSchedules(schedules);
+    setNewRule(BLANK_RULE);
+    setEditingIndex(null);
+    setSubmitAttempted(false);
+    setShowForm(false);
+    setExpandedCategories({});
+  }
+
+  function toggleDay(dayIndex) {
+    const days = newRule.days.includes(dayIndex)
+      ? newRule.days.filter((d) => d !== dayIndex)
+      : [...newRule.days, dayIndex].sort((a, b) => a - b);
+    setNewRule({ ...newRule, days });
+  }
+
+  function toggleExemptApp(packageName) {
+    const exempt = newRule.exemptApps || [];
+    const updated = exempt.includes(packageName)
+      ? exempt.filter((p) => p !== packageName)
+      : [...exempt, packageName];
+    setNewRule({ ...newRule, exemptApps: updated });
+  }
+
+  function selectAllInCategory(categoryName) {
+    const apps = appsByCategory[categoryName] || [];
+    const exempt = newRule.exemptApps || [];
+    const set = new Set(exempt);
+    for (const a of apps) set.add(a.packageName);
+    setNewRule({ ...newRule, exemptApps: Array.from(set) });
+  }
+
+  function clearCategory(categoryName) {
+    const apps = appsByCategory[categoryName] || [];
+    const pkgs = new Set(apps.map((a) => a.packageName));
+    const exempt = (newRule.exemptApps || []).filter((p) => !pkgs.has(p));
+    setNewRule({ ...newRule, exemptApps: exempt });
+  }
+
+  function toggleCategoryExpanded(categoryName) {
+    setExpandedCategories((prev) => ({ ...prev, [categoryName]: !prev[categoryName] }));
+  }
+
+  const schedules = (policy && policy.schedules) || [];
+  const inputStyle = {
+    padding: `${spacing.sm}px`,
+    border: `1px solid ${colors.border}`,
+    borderRadius: `${radius.md}px`,
+    fontSize: '14px',
+    marginTop: `${spacing.xs}px`,
+    background: colors.surface.input,
+    color: colors.text.primary,
+    width: '100%',
+    boxSizing: 'border-box',
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: `${spacing.xs}px`, marginBottom: `${spacing.sm}px` }}>
+        <h3 style={{ ...typography.subheading, fontWeight: '600', color: colors.text.primary, margin: 0 }}>
+          {t('rules.activeRules')}
+        </h3>
+        <button
+          onClick={() => { window.callBare('haptic:tap'); setShowInfo((v) => !v); }}
+          aria-label={t('rules.aboutScheduleRules')}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: `${spacing.xs}px`, display: 'flex', alignItems: 'center' }}
+        >
+          <Icon name="Info" size={16} color={colors.text.muted} />
+        </button>
+      </div>
+      {showInfo && (
+        <p style={{ ...typography.caption, color: colors.text.secondary, marginBottom: `${spacing.base}px`, lineHeight: '1.4', padding: `${spacing.sm}px`, background: colors.surface.elevated, borderRadius: `${radius.md}px` }}>
+          {t('rules.scheduleRuleInfo')}
+        </p>
+      )}
+      {schedules.length === 0 && (
+        <p style={{ ...typography.body, color: colors.text.muted, textAlign: 'center' }}>{t('rules.noBlackoutRules')}</p>
+      )}
+      {schedules.map((rule, i) => (
+        <RuleRow
+          key={i}
+          rule={rule}
+          onEdit={() => handleEditRule(i)}
+          onDelete={() => handleDeleteRule(i)}
+          colors={colors}
+          typography={typography}
+          spacing={spacing}
+          radius={radius}
+        />
+      ))}
+
+      {!showForm && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: `${spacing.xl}px` }}>
+          <button
+            onClick={() => { window.callBare('haptic:tap'); setShowForm(true); }}
+            aria-label={t('rules.addScheduleRule')}
+            style={{
+              display: 'flex', alignItems: 'center', gap: `${spacing.xs}px`,
+              padding: `${spacing.sm}px ${spacing.base}px`,
+              border: 'none',
+              borderRadius: `${radius.md}px`,
+              backgroundColor: colors.primary,
+              color: '#FFFFFF',
+              cursor: 'pointer',
+              ...typography.body,
+            }}
+          >
+            <Icon name="Plus" size={16} color="#FFFFFF" />
+            {t('rules.addRule')}
+          </button>
+        </div>
+      )}
+
+      {showForm && (<>
+      <h3 style={{ ...typography.subheading, fontWeight: '600', color: colors.text.primary, marginTop: `${spacing.xl}px`, marginBottom: `${spacing.sm}px` }}>
+        {editingIndex !== null ? t('rules.editRule') : t('rules.addRule')}
+      </h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: `${spacing.md}px` }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: `${spacing.xs}px`, ...typography.caption, color: colors.text.secondary }}>
+          {t('rules.label')}
+          <input
+            type="text"
+            value={newRule.label}
+            onChange={(e) => setNewRule({ ...newRule, label: e.target.value })}
+            placeholder={t('rules.labelPlaceholder')}
+            style={{ ...inputStyle, ...(submitAttempted && !newRule.label.trim() ? { borderColor: colors.error } : {}) }}
+            aria-label={t('rules.ruleLabel')}
+          />
+          {submitAttempted && !newRule.label.trim() && (
+            <span style={{ ...typography.caption, color: colors.error }}>{t('rules.labelRequired')}</span>
+          )}
+        </label>
+
+        <div>
+          <div style={{ ...typography.caption, color: colors.text.secondary, marginBottom: `${spacing.xs}px` }}>{t('rules.days')}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: `${spacing.xs}px` }}>
+            {DAY_LABELS.map((day, i) => (
+              <button
+                key={i}
+                onClick={() => toggleDay(i)}
+                aria-label={day}
+                style={{
+                  padding: `${spacing.xs}px ${spacing.sm}px`,
+                  borderRadius: `${radius.full}px`,
+                  border: `1px solid ${newRule.days.includes(i) ? colors.primary : colors.border}`,
+                  backgroundColor: newRule.days.includes(i) ? colors.primary : 'transparent',
+                  color: newRule.days.includes(i) ? '#FFFFFF' : colors.text.secondary,
+                  ...typography.caption,
+                  cursor: 'pointer',
+                }}
+              >
+                {day}
+              </button>
+            ))}
+          </div>
+          {submitAttempted && newRule.days.length === 0 && (
+            <span style={{ ...typography.caption, color: colors.error, marginTop: `${spacing.xs}px`, display: 'block' }}>
+              {t('rules.selectAtLeastOneDay')}
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: `${spacing.base}px` }}>
+          <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: `${spacing.xs}px`, ...typography.caption, color: colors.text.secondary }}>
+            {t('rules.blockedFrom')}
+            <input
+              type="time"
+              value={newRule.start}
+              onChange={(e) => setNewRule({ ...newRule, start: e.target.value })}
+              style={inputStyle}
+              aria-label={t('rules.blockedFromAria')}
+            />
+          </label>
+          <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: `${spacing.xs}px`, ...typography.caption, color: colors.text.secondary }}>
+            {t('rules.blockedUntil')}
+            <input
+              type="time"
+              value={newRule.end}
+              onChange={(e) => setNewRule({ ...newRule, end: e.target.value })}
+              style={inputStyle}
+              aria-label={t('rules.blockedUntilAria')}
+            />
+          </label>
+        </div>
+
+        {totalAppCount > 0 && (
+          <div>
+            <div style={{ ...typography.caption, color: colors.text.secondary, marginBottom: `${spacing.xs}px` }}>{t('rules.exemptApps')}</div>
+            <p style={{ ...typography.caption, color: colors.text.muted, margin: `2px 0 ${spacing.sm}px` }}>
+              {t('rules.exemptAppsWindow')}
+            </p>
+            <div style={{
+              display: 'flex', flexDirection: 'column',
+              maxHeight: '320px', overflowY: 'auto', overflowX: 'hidden',
+              border: `1px solid ${colors.border}`, borderRadius: `${radius.md}px`, padding: `${spacing.sm}px`,
+            }}>
+              {APP_CATEGORIES.filter((cat) => (appsByCategory[cat] || []).length > 0).map((cat) => {
+                const apps = appsByCategory[cat];
+                const exemptSet = new Set(newRule.exemptApps || []);
+                return (
+                  <ExemptCategoryGroup
+                    key={cat}
+                    categoryName={cat}
+                    apps={apps}
+                    exemptSet={exemptSet}
+                    onToggle={toggleExemptApp}
+                    onSelectAll={() => selectAllInCategory(cat)}
+                    onClear={() => clearCategory(cat)}
+                    expanded={!!expandedCategories[cat]}
+                    onToggleExpanded={() => toggleCategoryExpanded(cat)}
+                    colors={colors}
+                    typography={typography}
+                    spacing={spacing}
+                    radius={radius}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+      </div>
+      </>)}
+      {showForm && footerEl && createPortal(
+        <div style={{
+          display: 'flex',
+          gap: `${spacing.sm}px`,
+          padding: `${spacing.sm}px ${spacing.base}px`,
+          background: colors.surface.base,
+          borderTop: `1px solid ${colors.divider}`,
+        }}>
+          <button
+            onClick={handleSaveRule}
+            aria-label={editingIndex !== null ? t('rules.saveScheduleRule') : t('rules.addScheduleRule')}
+            style={{
+              flex: 1,
+              padding: `${spacing.sm}px ${spacing.base}px`,
+              border: 'none',
+              borderRadius: `${radius.md}px`,
+              backgroundColor: colors.primary,
+              color: '#FFFFFF',
+              cursor: 'pointer',
+              ...typography.body,
+              textAlign: 'center',
+            }}
+          >
+            {editingIndex !== null ? t('rules.saveChanges') : t('rules.addRule')}
+          </button>
+          <button
+            onClick={handleCancelEdit}
+            aria-label={t('common.cancel')}
+            style={{
+              flex: 1,
+              padding: `${spacing.sm}px ${spacing.base}px`,
+              border: `1px solid ${colors.border}`,
+              borderRadius: `${radius.md}px`,
+              background: 'transparent',
+              cursor: 'pointer',
+              ...typography.body,
+              color: colors.text.secondary,
+              textAlign: 'center',
+            }}
+          >
+            {t('common.cancel')}
+          </button>
+        </div>,
+        footerEl
+      )}
+    </div>
+  );
+}
+
+function ContactsSection({ policy, setPolicy, childPublicKey, colors, typography, spacing, radius }) {
+  const [picking, setPicking] = useState(false);
+
+  function saveContacts(contacts) {
+    const updated = { ...policy, allowedContacts: contacts };
+    setPolicy(updated);
+    window.callBare('policy:update', { childPublicKey, policy: updated });
+  }
+
+  function handleRemove(index) {
+    const contacts = policy.allowedContacts.filter((_, i) => i !== index);
+    saveContacts(contacts);
+  }
+
+  async function handleAddContact() {
+    setPicking(true);
+    try {
+      const contact = await window.callBare('contacts:pick');
+      if (contact && contact.phone) {
+        const contacts = [...(policy.allowedContacts || []), contact];
+        saveContacts(contacts);
+      }
+    } catch (e) {
+      // User cancelled picker or permission denied - silently ignore
+    } finally {
+      setPicking(false);
+    }
+  }
+
+  const contacts = (policy && policy.allowedContacts) || [];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: `${spacing.sm}px` }}>
+        <h3 style={{ ...typography.subheading, fontWeight: '600', color: colors.text.primary, margin: 0 }}>
+          {t('rules.allowedContacts')}
+        </h3>
+        <button
+          onClick={handleAddContact}
+          disabled={picking}
+          aria-label={t('rules.addContact')}
+          style={{
+            padding: `${spacing.xs}px ${spacing.sm}px`,
+            border: 'none',
+            borderRadius: `${radius.md}px`,
+            backgroundColor: colors.primary,
+            color: '#FFFFFF',
+            cursor: picking ? 'default' : 'pointer',
+            opacity: picking ? 0.6 : 1,
+            ...typography.caption,
+          }}
+        >
+          {picking ? t('rules.picking') : t('rules.addContactBtn')}
+        </button>
+      </div>
+      <p style={{ ...typography.caption, color: colors.text.muted, marginBottom: `${spacing.base}px` }}>
+        {t('rules.contactsInfo')}
+      </p>
+      {contacts.length === 0 && (
+        <p style={{ ...typography.body, color: colors.text.muted }}>{t('rules.noContacts')}</p>
+      )}
+      {contacts.map((contact, i) => (
+        <div key={i} style={{
+          display: 'flex', alignItems: 'center', gap: `${spacing.sm}px`,
+          padding: `${spacing.sm}px 0`, borderBottom: `1px solid ${colors.divider}`,
+        }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <span style={{ ...typography.body, fontWeight: '500', color: colors.text.primary }}>{contact.name}</span>
+            <span style={{ ...typography.caption, color: colors.text.secondary }}>{contact.phone}</span>
+          </div>
+          <button
+            onClick={() => handleRemove(i)}
+            aria-label={`Remove ${contact.name}`}
+            style={{
+              padding: `${spacing.xs}px ${spacing.sm}px`,
+              border: `1px solid ${colors.error}`,
+              borderRadius: `${radius.md}px`,
+              color: colors.error,
+              background: 'transparent',
+              cursor: 'pointer',
+              ...typography.caption,
+            }}
+          >
+            {t('common.remove')}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function RulesTab({ childPublicKey }) {
+  const { colors, typography, spacing, radius } = useTheme();
+  const [policy, setPolicy] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [footerEl, setFooterEl] = useState(null);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const footerRef = useCallback((node) => setFooterEl(node), []);
+
+  const loadPolicy = useCallback(() => {
+    window.callBare('policy:get', { childPublicKey })
+      .then((p) => { setPolicy(p); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [childPublicKey]);
+
+  useEffect(() => { loadPolicy(); }, [loadPolicy]);
+
+  useEffect(() => {
+    const unsub = window.onBareEvent('policy:updated', (data) => {
+      if (data && data.childPublicKey === childPublicKey) loadPolicy();
+    });
+    return () => unsub && unsub();
+  }, [childPublicKey, loadPolicy]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: `${spacing.base}px`, ...typography.body, color: colors.text.secondary }}>
+        {t('rules.loading')}
+      </div>
+    );
+  }
+
+  const sectionProps = { policy, setPolicy, childPublicKey, footerEl, colors, typography, spacing, radius };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: `${spacing.base}px` }}>
+        <button
+          onClick={() => { window.callBare('haptic:tap'); setPresetOpen(true); }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: `${spacing.xs}px`,
+            width: '100%', marginBottom: `${spacing.base}px`,
+            padding: `${spacing.sm}px`, cursor: 'pointer',
+            background: colors.surface.card, border: `1px dashed ${colors.border}`,
+            borderRadius: `${radius.md}px`,
+            ...typography.caption, color: colors.primary, fontWeight: '600',
+          }}
+        >
+          <Icon name="Lightning" size={16} color={colors.primary} />
+          {t('rules.quickSetupAge')}
+        </button>
+        <ScreenTimeSection {...sectionProps} />
+        <ScheduleSection {...sectionProps} />
+      </div>
+      <div ref={footerRef} />
+
+      <PresetModal
+        childPublicKey={childPublicKey}
+        policy={policy}
+        visible={presetOpen}
+        onClose={() => setPresetOpen(false)}
+        onApplied={loadPolicy}
+      />
+    </div>
+  );
+}

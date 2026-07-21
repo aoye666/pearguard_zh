@@ -1,0 +1,144 @@
+package com.pearguard
+
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import android.os.Bundle
+
+import com.facebook.react.ReactActivity
+import com.facebook.react.ReactActivityDelegate
+import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
+import com.facebook.react.defaults.DefaultReactActivityDelegate
+import com.facebook.react.modules.core.DeviceEventManagerModule
+
+import expo.modules.ReactActivityDelegateWrapper
+
+class MainActivity : ReactActivity() {
+
+    private val packageMonitor = PackageMonitorModule()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Set the theme to AppTheme BEFORE onCreate to support
+        // coloring the background, status bar, and navigation bar.
+        // This is required for expo-splash-screen.
+        setTheme(R.style.AppTheme);
+
+        // Intercept notification deep links on cold start — store the nav data
+        // in SharedPreferences so index.tsx can read it, then strip the URI from
+        // the intent so Expo Router doesn't navigate to +not-found.
+        interceptNotificationDeepLink(intent)
+
+        super.onCreate(null)
+
+        // Background wake-up (WorkManager usage flush, or ParentConnectionService
+        // resuming monitoring after a reboot): move to background quickly so the
+        // RN bridge has time to initialize and restart the worklet, but the user
+        // sees minimal disruption (no animation via intent flag, short delay).
+        if (intent?.getBooleanExtra("usage_flush_wake", false) == true ||
+            intent?.getBooleanExtra("parent_boot_wake", false) == true) {
+            android.os.Handler(mainLooper).postDelayed({
+                moveTaskToBack(true)
+            }, 10_000)
+        }
+
+        // ACTION_PACKAGE_ADDED and ACTION_PACKAGE_REMOVED cannot be received via
+        // manifest registration on Android 8+. Register the receiver at runtime so
+        // the child device can relay installs/uninstalls to the parent over P2P.
+        val filter = IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_PACKAGE_ADDED)
+            addAction(android.content.Intent.ACTION_PACKAGE_REMOVED)
+            addDataScheme("package")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(packageMonitor, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(packageMonitor, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(packageMonitor) } catch (_: Exception) {}
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        // Intercept notification deep links on warm start — store the nav data
+        // and strip the URI so Expo Router doesn't navigate away from index.tsx.
+        interceptNotificationDeepLink(intent)
+        super.onNewIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // After onNewIntent stores a nav URL, onResume fires. Emit a native event
+        // so JS can consume the pending navigation immediately. This handles both
+        // foreground (no AppState change) and background (AppState may race) cases.
+        val prefs = getSharedPreferences("pearguard_nav", MODE_PRIVATE)
+        if (prefs.getString("pendingNavUrl", null) != null) {
+            PearGuardReactHost.get()
+                ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                ?.emit("pearguard_pendingNav", null)
+        }
+    }
+
+    /**
+     * If the intent carries a pear://pearguard/alerts or /child-requests deep link,
+     * persist the URL in SharedPreferences (read by index.tsx on foreground) and
+     * clear the intent data so Expo Router never sees it.
+     */
+    private fun interceptNotificationDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "pear" || uri.host != "pearguard") return
+        val path = uri.path ?: ""
+        if (!path.startsWith("/alerts") && !path.startsWith("/child-requests")) return
+
+        // Store the full URL for index.tsx to consume
+        getSharedPreferences("pearguard_nav", MODE_PRIVATE)
+            .edit()
+            .putString("pendingNavUrl", uri.toString())
+            .apply()
+
+        // Strip the URI so Expo Router doesn't try to route it
+        intent?.data = null
+    }
+
+    /**
+     * Returns the name of the main component registered from JavaScript. This is used to schedule
+     * rendering of the component.
+     */
+    override fun getMainComponentName(): String = "main"
+
+    /**
+     * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]
+     * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
+     */
+    override fun createReactActivityDelegate(): ReactActivityDelegate {
+        return ReactActivityDelegateWrapper(
+            this,
+            BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
+            object : DefaultReactActivityDelegate(
+                this,
+                mainComponentName,
+                fabricEnabled
+            ){})
+    }
+
+    /**
+     * Align the back button behavior with Android S
+     * where moving root activities to background instead of finishing activities.
+     * @see <a href="https://developer.android.com/reference/android/app/Activity#onBackPressed()">onBackPressed</a>
+     */
+    override fun invokeDefaultOnBackPressed() {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
+            if (!moveTaskToBack(false)) {
+                // For non-root activities, use the default implementation to finish them.
+                super.invokeDefaultOnBackPressed()
+            }
+            return
+        }
+
+        // Use the default back button implementation on Android S
+        // because it's doing more than [Activity.moveTaskToBack] in fact.
+        super.invokeDefaultOnBackPressed()
+    }
+}

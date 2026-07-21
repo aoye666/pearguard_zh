@@ -1,0 +1,1800 @@
+package com.pearguard;
+
+import android.app.AppOpsManager;
+import android.app.NotificationChannel;
+import android.provider.Settings;
+import android.text.TextUtils;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.os.Build;
+import android.os.PowerManager;
+import android.os.Process;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+
+import androidx.core.app.NotificationCompat;
+
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactContextBaseJavaModule;
+import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.ReadableArray;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableMap;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.Calendar;
+import java.util.List;
+import java.util.Map;
+
+public class UsageStatsModule extends ReactContextBaseJavaModule {
+
+    private final ReactApplicationContext reactContext;
+
+    public UsageStatsModule(ReactApplicationContext reactContext) {
+        super(reactContext);
+        this.reactContext = reactContext;
+        // Populate singleton so non-module components can emit events
+        PearGuardReactHost.set(reactContext);
+    }
+
+    @Override
+    public String getName() {
+        // This is the name used in JS: NativeModules.UsageStatsModule
+        return "UsageStatsModule";
+    }
+
+    @Override
+    public void onCatalystInstanceDestroy() {
+        PearGuardReactHost.set(null);
+    }
+
+    private boolean hasUsageStatsPermission() {
+        AppOpsManager appOps = (AppOpsManager) reactContext.getSystemService(Context.APP_OPS_SERVICE);
+        int mode = appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                reactContext.getPackageName()
+        );
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private boolean isAccessibilityEnabled() {
+        String prefString;
+        try {
+            prefString = Settings.Secure.getString(
+                    reactContext.getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            );
+        } catch (Exception e) {
+            return false;
+        }
+        if (TextUtils.isEmpty(prefString)) return false;
+        // AppBlockerModule is in the same package; .class.getName() produces the FQCN
+        String ourService = reactContext.getPackageName() + "/" + AppBlockerModule.class.getName();
+        TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
+        splitter.setString(prefString);
+        while (splitter.hasNext()) {
+            if (splitter.next().equalsIgnoreCase(ourService)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns whether the app has been granted PACKAGE_USAGE_STATS permission.
+     * Call this before getUsage() to check if the permission wizard needs to run.
+     */
+    @ReactMethod
+    public void hasUsagePermission(Promise promise) {
+        promise.resolve(hasUsageStatsPermission());
+    }
+
+    /**
+     * True when this app is on the OS battery-optimization whitelist (Doze exempt).
+     * Returns true automatically on Android < 6 where Doze does not exist.
+     */
+    private boolean isIgnoringBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        PowerManager pm = (PowerManager) reactContext.getSystemService(Context.POWER_SERVICE);
+        if (pm == null) return false;
+        return pm.isIgnoringBatteryOptimizations(reactContext.getPackageName());
+    }
+
+    /**
+     * Role-agnostic battery-optimization status for the parent dashboard banner.
+     * Returns whitelisted (Doze-exempt) and whether the user has been asked before.
+     */
+    @ReactMethod
+    public void checkBatteryOptimization(Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        WritableMap result = Arguments.createMap();
+        result.putBoolean("whitelisted", isIgnoringBatteryOptimizations());
+        result.putBoolean("asked", prefs.getLong("battery_opt_asked_at", 0) > 0);
+        promise.resolve(result);
+    }
+
+    /**
+     * Returns whether both child-required permissions are granted, plus the last
+     * EnforcementService heartbeat timestamp for force-stop detection and any
+     * persisted bypass event for background-bypass detection.
+     * Used by the child setup wizard to poll and auto-advance steps.
+     */
+    @ReactMethod
+    public void checkChildPermissions(Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        WritableMap result = Arguments.createMap();
+        result.putBoolean("accessibility", isAccessibilityEnabled());
+        result.putBoolean("usageStats", hasUsageStatsPermission());
+        result.putBoolean("batteryOptimization", isIgnoringBatteryOptimizations());
+        result.putBoolean("batteryOptAsked", prefs.getLong("battery_opt_asked_at", 0) > 0);
+        result.putDouble("enforcementHeartbeatMs", prefs.getLong("enforcement_heartbeat_ms", 0));
+        String bypassReason = prefs.getString("bypass_detected_reason", null);
+        result.putString("bypassDetectedReason", bypassReason != null ? bypassReason : "");
+        result.putDouble("bypassDetectedAt", prefs.getLong("bypass_detected_at", 0));
+        promise.resolve(result);
+    }
+
+    /**
+     * Marks the battery-optimization wizard step as shown so existing users
+     * (already paired) are not redirected back to it on every app launch if
+     * they declined the prompt.
+     */
+    @ReactMethod
+    public void markBatteryOptAsked() {
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("battery_opt_asked_at", System.currentTimeMillis())
+            .apply();
+    }
+
+    /**
+     * Fires the system "Allow PearGuard to keep running in the background?" prompt.
+     * Scoped to this package so the user gets a one-tap Allow/Deny dialog instead
+     * of having to find the app in a list. Requires REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+     * in the manifest. Parental control apps are an explicitly allowed Play category
+     * for this prompt.
+     *
+     * Resolves true if already whitelisted (no prompt shown), false otherwise after
+     * the intent has been launched. The wizard polls checkChildPermissions to detect
+     * when the user grants the whitelist.
+     */
+    @ReactMethod
+    public void requestIgnoreBatteryOptimizations(Promise promise) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            promise.resolve(true);
+            return;
+        }
+        if (isIgnoringBatteryOptimizations()) {
+            promise.resolve(true);
+            return;
+        }
+        try {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + reactContext.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            reactContext.startActivity(intent);
+            promise.resolve(false);
+        } catch (Exception e) {
+            // Some OEMs disable the direct-prompt intent. Fall back to the full
+            // settings list — user has to find PearGuard themselves but it works.
+            try {
+                Intent fallback = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                reactContext.startActivity(fallback);
+                promise.resolve(false);
+            } catch (Exception e2) {
+                promise.reject("BATTERY_OPT_INTENT_FAILED", e2.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Clears the persisted bypass event after it has been relayed to the worklet,
+     * preventing it from re-firing on subsequent app launches.
+     */
+    @ReactMethod
+    public void clearBypassDetected() {
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .remove("bypass_detected_reason")
+            .remove("bypass_detected_at")
+            .apply();
+    }
+
+    /**
+     * Returns today's usage (in seconds) for a single package.
+     * Resolves with an integer (seconds used today), or 0 if no data.
+     */
+    @ReactMethod
+    public void getUsage(String packageName, Promise promise) {
+        UsageStatsManager usm = (UsageStatsManager)
+                reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long startOfDay = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startOfDay, now);
+        if (statsMap != null && statsMap.containsKey(packageName)) {
+            long ms = statsMap.get(packageName).getTotalTimeInForeground();
+            promise.resolve((int)(ms / 1000));
+        } else {
+            promise.resolve(0);
+        }
+    }
+
+    /**
+     * Returns daily usage for all apps today as an array of
+     * { packageName: string, appName: string, secondsToday: number }.
+     * Only includes apps with > 0 seconds.
+     */
+    @ReactMethod
+    public void getDailyUsageAll(Promise promise) {
+        UsageStatsManager usm = (UsageStatsManager)
+                reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+        PackageManager pm = reactContext.getPackageManager();
+
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        long startOfDay = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(startOfDay, now);
+
+        // Build a set of launcher-visible packages so we only report user-facing apps.
+        // System services (Google Play Services, SystemUI, etc.) have no launcher icon
+        // and should never appear in the Usage report.
+        java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+        if (resolveInfos != null) {
+            for (ResolveInfo ri : resolveInfos) {
+                launcherPackages.add(ri.activityInfo.packageName);
+            }
+        }
+
+        WritableArray result = Arguments.createArray();
+        if (statsMap != null) {
+            for (Map.Entry<String, UsageStats> entry : statsMap.entrySet()) {
+                long ms = entry.getValue().getTotalTimeInForeground();
+                if (ms <= 0) continue;
+
+                // Skip system services and non-launcher apps
+                if (!launcherPackages.contains(entry.getKey())) continue;
+
+                // Skip PearGuard itself
+                if (entry.getKey().equals(reactContext.getPackageName())) continue;
+
+                String label = entry.getKey();
+                try {
+                    ApplicationInfo info = pm.getApplicationInfo(entry.getKey(), 0);
+                    label = pm.getApplicationLabel(info).toString();
+                } catch (PackageManager.NameNotFoundException ignored) {}
+
+                WritableMap item = Arguments.createMap();
+                item.putString("packageName", entry.getKey());
+                item.putString("appName", label);
+                item.putInt("secondsToday", (int)(ms / 1000));
+                result.pushMap(item);
+            }
+        }
+        promise.resolve(result);
+    }
+
+    /**
+     * Returns per-day per-app aggregate totals for the last `daysBack` days
+     * (inclusive of today), as
+     * [ { date: "YYYY-MM-DD", apps: [{ packageName, displayName, secondsToday }] } ].
+     *
+     * Uses queryUsageStats(INTERVAL_DAILY, ...) with a single range query so
+     * we only see daily-bucket records. queryAndAggregateUsageStats picks
+     * "best fitting interval" and for older days falls back to weekly/monthly
+     * buckets, returning the bucket's full-period total for any single-day
+     * query inside it - inflates 30-day totals by 10x+. INTERVAL_DAILY
+     * returns nothing for days that have aged past Android's daily retention
+     * (~7-31 days), which is a correct undercount rather than a wild overcount.
+     *
+     * Filters to launcher-visible apps and drops PearGuard itself, matching
+     * getDailyUsageAll.
+     *
+     * Powers the parent's Trends and Category reports without depending on
+     * session-level captures: every flush re-sends the full window so days
+     * the parent missed are backfilled automatically on reconnect.
+     */
+    @ReactMethod
+    public void getDailyAggregatesRange(int daysBack, Promise promise) {
+        try {
+            UsageStatsManager usm = (UsageStatsManager)
+                    reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+            PackageManager pm = reactContext.getPackageManager();
+
+            int days = Math.max(1, Math.min(daysBack, 90));
+
+            java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+            Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+            launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+            if (resolveInfos != null) {
+                for (ResolveInfo ri : resolveInfos) {
+                    launcherPackages.add(ri.activityInfo.packageName);
+                }
+            }
+
+            String selfPkg = reactContext.getPackageName();
+
+            // Window: midnight of (today - days + 1) to now.
+            Calendar startCal = Calendar.getInstance();
+            startCal.set(Calendar.HOUR_OF_DAY, 0);
+            startCal.set(Calendar.MINUTE, 0);
+            startCal.set(Calendar.SECOND, 0);
+            startCal.set(Calendar.MILLISECOND, 0);
+            startCal.add(Calendar.DAY_OF_YEAR, -(days - 1));
+            long rangeStart = startCal.getTimeInMillis();
+            long rangeEnd = System.currentTimeMillis();
+
+            // dateStr -> packageName -> ms
+            java.util.Map<String, java.util.Map<String, Long>> byDay = new java.util.HashMap<>();
+            // packageName -> displayName cache
+            java.util.Map<String, String> labelCache = new java.util.HashMap<>();
+
+            // 25h cap excludes any bucket Android returns that's wider than a
+            // single calendar day (DST + safety margin). INTERVAL_DAILY should
+            // already give 24h buckets but we double-guard.
+            final long MAX_BUCKET_SPAN_MS = 25L * 60 * 60 * 1000;
+
+            List<UsageStats> stats = usm.queryUsageStats(
+                    UsageStatsManager.INTERVAL_DAILY, rangeStart, rangeEnd);
+
+            if (stats != null) {
+                for (UsageStats s : stats) {
+                    long bucketStart = s.getFirstTimeStamp();
+                    long bucketEnd = s.getLastTimeStamp();
+                    // Drop buckets entirely outside the window.
+                    if (bucketEnd <= rangeStart) continue;
+                    if (bucketStart >= rangeEnd) continue;
+                    // Drop non-daily buckets if any slipped through.
+                    if (bucketEnd - bucketStart > MAX_BUCKET_SPAN_MS) continue;
+
+                    long ms = s.getTotalTimeInForeground();
+                    if (ms <= 0) continue;
+
+                    String pkg = s.getPackageName();
+                    if (!launcherPackages.contains(pkg)) continue;
+                    if (pkg.equals(selfPkg)) continue;
+
+                    Calendar bucketCal = Calendar.getInstance();
+                    bucketCal.setTimeInMillis(bucketStart);
+                    String dateStr = String.format(java.util.Locale.US, "%04d-%02d-%02d",
+                            bucketCal.get(Calendar.YEAR),
+                            bucketCal.get(Calendar.MONTH) + 1,
+                            bucketCal.get(Calendar.DAY_OF_MONTH));
+
+                    java.util.Map<String, Long> dayMap = byDay.get(dateStr);
+                    if (dayMap == null) {
+                        dayMap = new java.util.HashMap<>();
+                        byDay.put(dateStr, dayMap);
+                    }
+                    Long prev = dayMap.get(pkg);
+                    dayMap.put(pkg, (prev == null ? 0L : prev) + ms);
+
+                    if (!labelCache.containsKey(pkg)) {
+                        String label = pkg;
+                        try {
+                            ApplicationInfo info = pm.getApplicationInfo(pkg, 0);
+                            label = pm.getApplicationLabel(info).toString();
+                        } catch (PackageManager.NameNotFoundException ignored) {}
+                        labelCache.put(pkg, label);
+                    }
+                }
+            }
+
+            // Emit one entry per day (today first), with empty apps for days
+            // where Android has no daily data.
+            WritableArray result = Arguments.createArray();
+            for (int i = 0; i < days; i++) {
+                Calendar c = Calendar.getInstance();
+                c.set(Calendar.HOUR_OF_DAY, 0);
+                c.set(Calendar.MINUTE, 0);
+                c.set(Calendar.SECOND, 0);
+                c.set(Calendar.MILLISECOND, 0);
+                c.add(Calendar.DAY_OF_YEAR, -i);
+                String dateStr = String.format(java.util.Locale.US, "%04d-%02d-%02d",
+                        c.get(Calendar.YEAR),
+                        c.get(Calendar.MONTH) + 1,
+                        c.get(Calendar.DAY_OF_MONTH));
+
+                java.util.Map<String, Long> dayMap = byDay.get(dateStr);
+                WritableArray apps = Arguments.createArray();
+                if (dayMap != null) {
+                    for (java.util.Map.Entry<String, Long> e : dayMap.entrySet()) {
+                        WritableMap app = Arguments.createMap();
+                        app.putString("packageName", e.getKey());
+                        app.putString("displayName", labelCache.getOrDefault(e.getKey(), e.getKey()));
+                        app.putInt("secondsToday", (int)(e.getValue() / 1000));
+                        apps.pushMap(app);
+                    }
+                }
+
+                WritableMap dayEntry = Arguments.createMap();
+                dayEntry.putString("date", dateStr);
+                dayEntry.putArray("apps", apps);
+                result.pushMap(dayEntry);
+            }
+
+            promise.resolve(result);
+        } catch (Exception e) {
+            promise.reject("DAILY_AGGREGATES_ERROR", e.getMessage());
+        }
+    }
+
+    /**
+     * Collect daily per-app usage as a JSONArray.
+     * Callable from EnforcementService without needing the RN bridge.
+     * Returns: [ { "packageName": "...", "appName": "...", "secondsToday": N }, ... ]
+     */
+    public static JSONArray collectDailyUsageNative(Context context) {
+        JSONArray result = new JSONArray();
+        try {
+            UsageStatsManager usm = (UsageStatsManager)
+                    context.getSystemService(Context.USAGE_STATS_SERVICE);
+            android.content.pm.PackageManager pm = context.getPackageManager();
+
+            Calendar cal = Calendar.getInstance();
+            cal.set(Calendar.HOUR_OF_DAY, 0);
+            cal.set(Calendar.MINUTE, 0);
+            cal.set(Calendar.SECOND, 0);
+            cal.set(Calendar.MILLISECOND, 0);
+            long startOfDay = cal.getTimeInMillis();
+            long now = System.currentTimeMillis();
+
+            // Build launcher-visible set
+            java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+            Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+            launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            java.util.List<android.content.pm.ResolveInfo> resolveInfos =
+                    pm.queryIntentActivities(launcherIntent, 0);
+            if (resolveInfos != null) {
+                for (android.content.pm.ResolveInfo ri : resolveInfos) {
+                    launcherPackages.add(ri.activityInfo.packageName);
+                }
+            }
+
+            final long MERGE_GAP_MS = 3000;
+            java.util.Map<String, Long> totalMs = new java.util.HashMap<>();
+            java.util.Map<String, Long> sessionStarts = new java.util.HashMap<>();
+            java.util.Map<String, Long> recentPauses = new java.util.HashMap<>();
+            // The last launcher app resumed is the one actually on screen; only
+            // its open session may run to `now` (see the still-in-foreground pass).
+            String lastForegroundPkg = null;
+
+            UsageEvents events = usm.queryEvents(startOfDay, now);
+            if (events != null) {
+                UsageEvents.Event event = new UsageEvents.Event();
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event);
+                    String pkg = event.getPackageName();
+                    int type = event.getEventType();
+                    if (type == UsageEvents.Event.MOVE_TO_FOREGROUND || type == UsageEvents.Event.ACTIVITY_RESUMED) {
+                        if (launcherPackages.contains(pkg) && !pkg.equals(context.getPackageName())) {
+                            lastForegroundPkg = pkg;
+                        }
+                        Long pausedAt = recentPauses.remove(pkg);
+                        if (pausedAt != null && (event.getTimeStamp() - pausedAt) <= MERGE_GAP_MS) {
+                            // Short gap - merge
+                        } else {
+                            if (pausedAt != null) {
+                                Long start = sessionStarts.remove(pkg);
+                                if (start != null) {
+                                    long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                                    totalMs.put(pkg, prev + (pausedAt - start));
+                                }
+                            }
+                            sessionStarts.put(pkg, event.getTimeStamp());
+                        }
+                    } else if (type == UsageEvents.Event.MOVE_TO_BACKGROUND || type == UsageEvents.Event.ACTIVITY_PAUSED) {
+                        if (sessionStarts.containsKey(pkg)) {
+                            recentPauses.put(pkg, event.getTimeStamp());
+                        }
+                    }
+                }
+            }
+
+            // Flush remaining pauses
+            for (java.util.Map.Entry<String, Long> entry : recentPauses.entrySet()) {
+                String pkg = entry.getKey();
+                Long start = sessionStarts.remove(pkg);
+                if (start != null) {
+                    long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                    totalMs.put(pkg, prev + (entry.getValue() - start));
+                }
+            }
+
+            // Add elapsed time for apps still in foreground, gated to the app
+            // genuinely on screen right now so a stale never-closed session or a
+            // screen-off background-audio app can't accrue idle hours.
+            boolean screenInteractive = UsageSessionUtil.isScreenInteractive(context);
+            for (java.util.Map.Entry<String, Long> entry : sessionStarts.entrySet()) {
+                String pkg = entry.getKey();
+                if (!UsageSessionUtil.shouldAccrueOpenSession(screenInteractive, pkg, lastForegroundPkg)) continue;
+                long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                totalMs.put(pkg, prev + (now - entry.getValue()));
+            }
+
+            String ownPackage = context.getPackageName();
+            for (java.util.Map.Entry<String, Long> entry : totalMs.entrySet()) {
+                long ms = entry.getValue();
+                if (ms <= 0) continue;
+                if (!launcherPackages.contains(entry.getKey())) continue;
+                if (entry.getKey().equals(ownPackage)) continue;
+
+                String label = entry.getKey();
+                try {
+                    android.content.pm.ApplicationInfo info = pm.getApplicationInfo(entry.getKey(), 0);
+                    label = pm.getApplicationLabel(info).toString();
+                } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {}
+
+                try {
+                    JSONObject item = new JSONObject();
+                    item.put("packageName", entry.getKey());
+                    item.put("appName", label);
+                    item.put("secondsToday", (int)(ms / 1000));
+                    result.put(item);
+                } catch (JSONException ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    @ReactMethod
+    public void getQueuedReports(Promise promise) {
+        try {
+            String json = UsageQueueHelper.dequeue(reactContext);
+            promise.resolve(json);
+        } catch (Exception e) {
+            promise.resolve("[]");
+        }
+    }
+
+    @ReactMethod
+    public void clearQueuedReports(Promise promise) {
+        try {
+            UsageQueueHelper.clear(reactContext);
+            // Record flush time so WorkManager only wakes the app when data is stale
+            reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+                .edit()
+                .putLong("last_usage_flush_ms", System.currentTimeMillis())
+                .apply();
+            promise.resolve(true);
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
+    }
+
+    /**
+     * Drained by index.tsx onTimeRequestDrain handler when UsageFlushWorker
+     * fires. Returns a JSON array of pending time/approval requests captured
+     * while the RN bridge was detached.
+     */
+    @ReactMethod
+    public void getQueuedTimeRequests(Promise promise) {
+        try {
+            String json = TimeRequestQueueHelper.dequeue(reactContext);
+            promise.resolve(json);
+        } catch (Exception e) {
+            promise.resolve("[]");
+        }
+    }
+
+    @ReactMethod
+    public void clearQueuedTimeRequests(Promise promise) {
+        try {
+            TimeRequestQueueHelper.clear(reactContext);
+            promise.resolve(true);
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
+    }
+
+    /**
+     * Like getDailyUsageAll() but uses raw MOVE_TO_FOREGROUND / MOVE_TO_BACKGROUND
+     * events instead of aggregate stats. This includes the current live session,
+     * giving real-time accuracy (aggregate stats lag until the app backgrounds).
+     * Falls back to getDailyUsageAll() if event query fails.
+     */
+    @ReactMethod
+    public void getDailyUsageAllEvents(Promise promise) {
+        try {
+            UsageStatsManager usm = (UsageStatsManager)
+                    reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+            PackageManager pm = reactContext.getPackageManager();
+
+            Calendar cal = Calendar.getInstance();
+            cal.set(Calendar.HOUR_OF_DAY, 0);
+            cal.set(Calendar.MINUTE, 0);
+            cal.set(Calendar.SECOND, 0);
+            cal.set(Calendar.MILLISECOND, 0);
+            long startOfDay = cal.getTimeInMillis();
+            long now = System.currentTimeMillis();
+
+            // Build launcher-visible set
+            java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+            Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+            launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+            if (resolveInfos != null) {
+                for (ResolveInfo ri : resolveInfos) {
+                    launcherPackages.add(ri.activityInfo.packageName);
+                }
+            }
+
+            // Track per-package foreground time from raw events.
+            // Gesture navigation on Android 12+ causes rapid RESUMED/PAUSED
+            // transitions (launcher briefly appears during swipe). We merge
+            // sessions separated by gaps shorter than MERGE_GAP_MS so that
+            // e.g. swiping through YouTube Shorts counts as continuous use.
+            final long MERGE_GAP_MS = 3000;
+            java.util.Map<String, Long> totalMs = new java.util.HashMap<>();
+            java.util.Map<String, Long> sessionStarts = new java.util.HashMap<>();
+            java.util.Map<String, Long> recentPauses = new java.util.HashMap<>();
+            // The last launcher app to come to the foreground is the one actually
+            // on screen; only its open session may run to `now` (see below).
+            String lastForegroundPkg = null;
+
+            UsageEvents events = usm.queryEvents(startOfDay, now);
+            if (events != null) {
+                UsageEvents.Event event = new UsageEvents.Event();
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event);
+                    String pkg = event.getPackageName();
+                    int type = event.getEventType();
+                    // Handle both legacy (MOVE_TO_FOREGROUND/BACKGROUND) and
+                    // API 29+ (ACTIVITY_RESUMED/ACTIVITY_PAUSED) event types
+                    if (type == UsageEvents.Event.MOVE_TO_FOREGROUND || type == UsageEvents.Event.ACTIVITY_RESUMED) {
+                        if (launcherPackages.contains(pkg) && !pkg.equals(reactContext.getPackageName())) {
+                            lastForegroundPkg = pkg;
+                        }
+                        Long pausedAt = recentPauses.remove(pkg);
+                        if (pausedAt != null && (event.getTimeStamp() - pausedAt) <= MERGE_GAP_MS) {
+                            // Short gap - merge: restore original session start (still in sessionStarts)
+                        } else {
+                            // Flush any stale pause that exceeded the gap
+                            if (pausedAt != null) {
+                                Long start = sessionStarts.remove(pkg);
+                                if (start != null) {
+                                    long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                                    totalMs.put(pkg, prev + (pausedAt - start));
+                                }
+                            }
+                            sessionStarts.put(pkg, event.getTimeStamp());
+                        }
+                    } else if (type == UsageEvents.Event.MOVE_TO_BACKGROUND || type == UsageEvents.Event.ACTIVITY_PAUSED) {
+                        if (sessionStarts.containsKey(pkg)) {
+                            recentPauses.put(pkg, event.getTimeStamp());
+                        }
+                    } else if (type == UsageEvents.Event.SCREEN_NON_INTERACTIVE
+                            || type == UsageEvents.Event.KEYGUARD_SHOWN) {
+                        // Screen turned off / device locked. Close every open
+                        // session at this boundary. Many devices do not emit a
+                        // per-app ACTIVITY_PAUSED when the screen sleeps, so
+                        // without this the "still in foreground" pass below would
+                        // add all the locked/idle time (potentially hours) to
+                        // whatever app was on top. No session merges across a
+                        // screen-off, so we finalize and reset here.
+                        long boundary = event.getTimeStamp();
+                        for (java.util.Map.Entry<String, Long> open : sessionStarts.entrySet()) {
+                            String p = open.getKey();
+                            long start = open.getValue();
+                            Long pausedAt = recentPauses.get(p);
+                            long end = (pausedAt != null && pausedAt >= start) ? pausedAt : boundary;
+                            long add = end - start;
+                            if (add > 0) {
+                                long prev = totalMs.containsKey(p) ? totalMs.get(p) : 0;
+                                totalMs.put(p, prev + add);
+                            }
+                        }
+                        sessionStarts.clear();
+                        recentPauses.clear();
+                    }
+                }
+            }
+
+            // Flush remaining pauses that were never followed by a resume
+            for (java.util.Map.Entry<String, Long> entry : recentPauses.entrySet()) {
+                String pkg = entry.getKey();
+                Long start = sessionStarts.remove(pkg);
+                if (start != null) {
+                    long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                    totalMs.put(pkg, prev + (entry.getValue() - start));
+                }
+            }
+
+            // Add elapsed time for apps still in foreground, but only for the app
+            // that is genuinely on screen right now. A stale never-closed session
+            // (or a background-audio app after screen-off) must not run to `now` —
+            // that is the source of the multi-hour phantom totals.
+            boolean screenInteractive = UsageSessionUtil.isScreenInteractive(reactContext);
+            for (java.util.Map.Entry<String, Long> entry : sessionStarts.entrySet()) {
+                String pkg = entry.getKey();
+                if (!UsageSessionUtil.shouldAccrueOpenSession(screenInteractive, pkg, lastForegroundPkg)) continue;
+                long prev = totalMs.containsKey(pkg) ? totalMs.get(pkg) : 0;
+                totalMs.put(pkg, prev + (now - entry.getValue()));
+            }
+
+            WritableArray result = Arguments.createArray();
+            for (java.util.Map.Entry<String, Long> entry : totalMs.entrySet()) {
+                long ms = entry.getValue();
+                if (ms <= 0) continue;
+                if (!launcherPackages.contains(entry.getKey())) continue;
+                if (entry.getKey().equals(reactContext.getPackageName())) continue;
+
+                String label = entry.getKey();
+                try {
+                    ApplicationInfo info = pm.getApplicationInfo(entry.getKey(), 0);
+                    label = pm.getApplicationLabel(info).toString();
+                } catch (PackageManager.NameNotFoundException ignored) {}
+
+                WritableMap item = Arguments.createMap();
+                item.putString("packageName", entry.getKey());
+                item.putString("appName", label);
+                item.putInt("secondsToday", (int)(ms / 1000));
+                result.pushMap(item);
+            }
+            promise.resolve(result);
+        } catch (Exception e) {
+            // Fall back to aggregate-based method
+            getDailyUsageAll(promise);
+        }
+    }
+
+    /**
+     * Returns session-level usage data for today (from midnight).
+     * Each session is { packageName, displayName, startedAt, endedAt, durationSeconds }.
+     * Open sessions (still in foreground) have endedAt = null.
+     * Queries from midnight each time so totals match getDailyUsageAllEvents().
+     */
+    @ReactMethod
+    public void getSessionsSinceLastFlush(Promise promise) {
+        try {
+            Context ctx = getReactApplicationContext();
+            UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
+            PackageManager pm = ctx.getPackageManager();
+
+            long now = System.currentTimeMillis();
+            Calendar cal = Calendar.getInstance();
+            cal.set(Calendar.HOUR_OF_DAY, 0);
+            cal.set(Calendar.MINUTE, 0);
+            cal.set(Calendar.SECOND, 0);
+            cal.set(Calendar.MILLISECOND, 0);
+            long startOfToday = cal.getTimeInMillis();
+
+            // Build launcher-visible set to filter out system apps
+            java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+            Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+            launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+            if (resolveInfos != null) {
+                for (ResolveInfo ri : resolveInfos) {
+                    launcherPackages.add(ri.activityInfo.packageName);
+                }
+            }
+
+            // Query from midnight so sessions cover the full day and match todaySeconds
+            UsageEvents events = usm.queryEvents(startOfToday, now);
+            if (events == null) {
+                promise.resolve(Arguments.createArray());
+                return;
+            }
+
+            // Merge sessions separated by short gaps caused by gesture navigation.
+            final long SESSION_MERGE_GAP_MS = 3000;
+            java.util.Map<String, Long> fgStarts = new java.util.HashMap<>();
+            java.util.Map<String, Long> recentSessionPauses = new java.util.HashMap<>();
+            // Track the original session start for merging
+            java.util.Map<String, Long> mergedSessionStarts = new java.util.HashMap<>();
+            // The last app resumed is the one on screen now; only its session may
+            // stay open to `now` (see the open-sessions pass below).
+            String lastForegroundPkg = null;
+            WritableArray sessions = Arguments.createArray();
+            UsageEvents.Event event = new UsageEvents.Event();
+
+            while (events.getNextEvent(event)) {
+                String pkg = event.getPackageName();
+                int type = event.getEventType();
+
+                // Screen-off / lock events are not tied to a launcher package,
+                // so handle them before the package filters below. Close and
+                // emit every open session at this boundary so idle locked time
+                // is never folded into a session's duration (mirrors the fix in
+                // getDailyUsageAllEvents).
+                if (type == UsageEvents.Event.SCREEN_NON_INTERACTIVE
+                        || type == UsageEvents.Event.KEYGUARD_SHOWN) {
+                    long boundary = event.getTimeStamp();
+                    for (java.util.Map.Entry<String, Long> open : fgStarts.entrySet()) {
+                        String p = open.getKey();
+                        Long mergedStart = mergedSessionStarts.get(p);
+                        long start = mergedStart != null ? mergedStart : open.getValue();
+                        Long pausedAt = recentSessionPauses.get(p);
+                        long end = (pausedAt != null && pausedAt >= start) ? pausedAt : boundary;
+                        long durationSec = (end - start) / 1000;
+                        if (durationSec >= 1) {
+                            WritableMap session = Arguments.createMap();
+                            session.putString("packageName", p);
+                            session.putString("displayName", getAppLabel(pm, p));
+                            session.putDouble("startedAt", (double) start);
+                            session.putDouble("endedAt", (double) end);
+                            session.putInt("durationSeconds", (int) durationSec);
+                            sessions.pushMap(session);
+                        }
+                    }
+                    fgStarts.clear();
+                    recentSessionPauses.clear();
+                    mergedSessionStarts.clear();
+                    continue;
+                }
+
+                if (pkg.equals(ctx.getPackageName())) continue;
+                if (!launcherPackages.contains(pkg)) continue;
+
+                // Handle both legacy (MOVE_TO_FOREGROUND/BACKGROUND) and
+                // API 29+ (ACTIVITY_RESUMED/ACTIVITY_PAUSED) event types
+                if (type == UsageEvents.Event.MOVE_TO_FOREGROUND || type == UsageEvents.Event.ACTIVITY_RESUMED) {
+                    // pkg is already filtered to launcher, non-self above.
+                    lastForegroundPkg = pkg;
+                    Long pausedAt = recentSessionPauses.remove(pkg);
+                    if (pausedAt != null && (event.getTimeStamp() - pausedAt) <= SESSION_MERGE_GAP_MS) {
+                        // Short gap - merge: keep original start in mergedSessionStarts
+                        fgStarts.put(pkg, event.getTimeStamp());
+                    } else {
+                        // Flush previous session if gap exceeded
+                        if (pausedAt != null) {
+                            Long mergedStart = mergedSessionStarts.remove(pkg);
+                            long sessionStart = mergedStart != null ? mergedStart : fgStarts.getOrDefault(pkg, pausedAt);
+                            long durationSec = (pausedAt - sessionStart) / 1000;
+                            if (durationSec >= 1) {
+                                WritableMap session = Arguments.createMap();
+                                session.putString("packageName", pkg);
+                                session.putString("displayName", getAppLabel(pm, pkg));
+                                session.putDouble("startedAt", (double) sessionStart);
+                                session.putDouble("endedAt", (double) pausedAt);
+                                session.putInt("durationSeconds", (int) durationSec);
+                                sessions.pushMap(session);
+                            }
+                        }
+                        fgStarts.put(pkg, event.getTimeStamp());
+                        mergedSessionStarts.put(pkg, event.getTimeStamp());
+                    }
+                } else if (type == UsageEvents.Event.MOVE_TO_BACKGROUND || type == UsageEvents.Event.ACTIVITY_PAUSED) {
+                    if (fgStarts.containsKey(pkg)) {
+                        recentSessionPauses.put(pkg, event.getTimeStamp());
+                        if (!mergedSessionStarts.containsKey(pkg)) {
+                            mergedSessionStarts.put(pkg, fgStarts.get(pkg));
+                        }
+                    }
+                }
+            }
+
+            // Flush remaining pauses that were never followed by a resume
+            for (java.util.Map.Entry<String, Long> entry : recentSessionPauses.entrySet()) {
+                String pkg = entry.getKey();
+                long pausedAt = entry.getValue();
+                Long mergedStart = mergedSessionStarts.remove(pkg);
+                long sessionStart = mergedStart != null ? mergedStart : fgStarts.getOrDefault(pkg, pausedAt);
+                fgStarts.remove(pkg);
+                long durationSec = (pausedAt - sessionStart) / 1000;
+                if (durationSec >= 1) {
+                    WritableMap session = Arguments.createMap();
+                    session.putString("packageName", pkg);
+                    session.putString("displayName", getAppLabel(pm, pkg));
+                    session.putDouble("startedAt", (double) sessionStart);
+                    session.putDouble("endedAt", (double) pausedAt);
+                    session.putInt("durationSeconds", (int) durationSec);
+                    sessions.pushMap(session);
+                }
+            }
+
+            // Open sessions (still in foreground). Only the app genuinely on
+            // screen now may extend to `now`; a stale never-closed session or a
+            // screen-off background-audio app is dropped rather than reported as
+            // a multi-hour open session.
+            boolean screenInteractive = UsageSessionUtil.isScreenInteractive(ctx);
+            for (java.util.Map.Entry<String, Long> entry : fgStarts.entrySet()) {
+                if (!UsageSessionUtil.shouldAccrueOpenSession(screenInteractive, entry.getKey(), lastForegroundPkg)) continue;
+                Long mergedStart = mergedSessionStarts.get(entry.getKey());
+                long start = mergedStart != null ? mergedStart : entry.getValue();
+                long durationSec = (now - start) / 1000;
+                if (durationSec >= 1) {
+                    WritableMap session = Arguments.createMap();
+                    session.putString("packageName", entry.getKey());
+                    session.putString("displayName", getAppLabel(pm, entry.getKey()));
+                    session.putDouble("startedAt", (double) start);
+                    session.putNull("endedAt");
+                    session.putInt("durationSeconds", (int) durationSec);
+                    sessions.pushMap(session);
+                }
+            }
+
+            promise.resolve(sessions);
+        } catch (Exception e) {
+            promise.reject("SESSION_ERROR", e.getMessage());
+        }
+    }
+
+    private String getAppLabel(PackageManager pm, String packageName) {
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(packageName, 0);
+            return pm.getApplicationLabel(ai).toString();
+        } catch (Exception e) {
+            return packageName;
+        }
+    }
+
+    /**
+     * Returns rolling 7-day usage for all launcher-visible apps as an array of
+     * { packageName: string, appName: string, secondsThisWeek: number }.
+     * Window is midnight of (today - 6) through now, so the UI label "Last 7 days"
+     * matches what the UI shows. Only includes apps with > 0 seconds.
+     */
+    @ReactMethod
+    public void getWeeklyUsageAll(Promise promise) {
+        UsageStatsManager usm = (UsageStatsManager)
+                reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+        PackageManager pm = reactContext.getPackageManager();
+
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        cal.add(Calendar.DAY_OF_YEAR, -6);
+        long windowStart = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(windowStart, now);
+
+        java.util.Set<String> launcherPackages = new java.util.HashSet<>();
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+        if (resolveInfos != null) {
+            for (ResolveInfo ri : resolveInfos) {
+                launcherPackages.add(ri.activityInfo.packageName);
+            }
+        }
+
+        WritableArray result = Arguments.createArray();
+        if (statsMap != null) {
+            for (Map.Entry<String, UsageStats> entry : statsMap.entrySet()) {
+                long ms = entry.getValue().getTotalTimeInForeground();
+                if (ms <= 0) continue;
+                if (!launcherPackages.contains(entry.getKey())) continue;
+                if (entry.getKey().equals(reactContext.getPackageName())) continue;
+
+                String label = entry.getKey();
+                try {
+                    ApplicationInfo info = pm.getApplicationInfo(entry.getKey(), 0);
+                    label = pm.getApplicationLabel(info).toString();
+                } catch (PackageManager.NameNotFoundException ignored) {}
+
+                WritableMap item = Arguments.createMap();
+                item.putString("packageName", entry.getKey());
+                item.putString("appName", label);
+                item.putInt("secondsThisWeek", (int)(ms / 1000));
+                result.pushMap(item);
+            }
+        }
+        promise.resolve(result);
+    }
+
+    /**
+     * Returns all apps that have a home-screen launcher icon as
+     * { packageName: string, appName: string }.
+     * Uses ACTION_MAIN + CATEGORY_LAUNCHER to include pre-installed apps like
+     * Chrome and YouTube that have FLAG_SYSTEM but are still user-visible.
+     */
+    @ReactMethod
+    public void getInstalledPackages(Promise promise) {
+        PackageManager pm = reactContext.getPackageManager();
+
+        // Determine the default home launcher package so it can be auto-approved
+        Intent homeIntent = new Intent(Intent.ACTION_MAIN, null);
+        homeIntent.addCategory(Intent.CATEGORY_HOME);
+        ResolveInfo defaultHome = pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY);
+        String launcherPackage = defaultHome != null ? defaultHome.activityInfo.packageName : null;
+
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+        launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> resolveInfos = pm.queryIntentActivities(launcherIntent, 0);
+
+        WritableArray result = Arguments.createArray();
+        if (resolveInfos == null) {
+            promise.resolve(result);
+            return;
+        }
+        for (ResolveInfo info : resolveInfos) {
+            ApplicationInfo ai = info.activityInfo.applicationInfo;
+            // Skip PearGuard itself
+            if (ai.packageName.equals(reactContext.getPackageName())) continue;
+
+            String appName;
+            try {
+                appName = pm.getApplicationLabel(ai).toString();
+            } catch (Exception e) {
+                appName = ai.packageName;
+            }
+
+            WritableMap item = Arguments.createMap();
+            item.putString("packageName", ai.packageName);
+            item.putString("appName", appName);
+            item.putBoolean("isLauncher", ai.packageName.equals(launcherPackage));
+            item.putString("category", AppCategoryHelper.getCategory(ai));
+            try {
+                android.graphics.drawable.Drawable drawable = pm.getApplicationIcon(ai.packageName);
+                android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(144, 144, android.graphics.Bitmap.Config.ARGB_8888);
+                android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+                drawable.setBounds(0, 0, 144, 144);
+                drawable.draw(canvas);
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos);
+                item.putString("iconBase64", android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP));
+            } catch (Exception ignored) {}
+            result.pushMap(item);
+        }
+        promise.resolve(result);
+    }
+
+    /**
+     * Returns EVERY installed package name (not just launcher apps) as a string
+     * array. Used to reconcile the child's policy against reality: any policy app
+     * absent from this full set has been uninstalled and should be pruned. Must be
+     * the full set - a launcher-only list would wrongly prune an installed but
+     * non-launchable app the parent explicitly blocked.
+     */
+    @ReactMethod
+    public void getAllInstalledPackageNames(Promise promise) {
+        WritableArray result = Arguments.createArray();
+        try {
+            PackageManager pm = reactContext.getPackageManager();
+            List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+            for (ApplicationInfo ai : apps) {
+                if (ai.packageName != null) result.pushString(ai.packageName);
+            }
+        } catch (Exception e) {
+            // Never reject: a scan failure must not stall apps:sync. An empty result
+            // is treated by the bare handler as "unknown", so nothing is pruned.
+        }
+        promise.resolve(result);
+    }
+
+    /**
+     * Returns rolling 7-day usage for a single package as
+     * { packageName, secondsThisWeek }. Window is midnight of (today - 6) to now.
+     */
+    @ReactMethod
+    public void getWeeklyUsage(String packageName, Promise promise) {
+        UsageStatsManager usm = (UsageStatsManager)
+                reactContext.getSystemService(Context.USAGE_STATS_SERVICE);
+
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.HOUR_OF_DAY, 0);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        cal.add(Calendar.DAY_OF_YEAR, -6);
+        long windowStart = cal.getTimeInMillis();
+        long now = System.currentTimeMillis();
+
+        Map<String, UsageStats> statsMap = usm.queryAndAggregateUsageStats(windowStart, now);
+        if (statsMap != null && statsMap.containsKey(packageName)) {
+            long ms = statsMap.get(packageName).getTotalTimeInForeground();
+            WritableMap result = Arguments.createMap();
+            result.putString("packageName", packageName);
+            result.putInt("secondsThisWeek", (int)(ms / 1000));
+            promise.resolve(result);
+        } else {
+            WritableMap result = Arguments.createMap();
+            result.putString("packageName", packageName);
+            result.putInt("secondsThisWeek", 0);
+            promise.resolve(result);
+        }
+    }
+
+    /**
+     * Writes policy JSON to SharedPreferences so native modules can read it.
+     * Called from app/index.tsx when a policy:update message arrives from the bare worklet.
+     */
+    @ReactMethod
+    public void setPolicy(String policyJson) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        prefs.edit().putString("pearguard_policy", policyJson).apply();
+
+        // When the parent sends a definitive decision (allowed/blocked), clear the pending
+        // request suppression in AppBlockerModule so the overlay can resume normal behavior.
+        try {
+            org.json.JSONObject policy = new org.json.JSONObject(policyJson);
+            org.json.JSONObject apps = policy.optJSONObject("apps");
+            if (apps != null) {
+                java.util.Iterator<String> keys = apps.keys();
+                while (keys.hasNext()) {
+                    String pkg = keys.next();
+                    String status = apps.getJSONObject(pkg).optString("status", "allowed");
+                    if ("allowed".equals(status) || "blocked".equals(status)) {
+                        AppBlockerModule.clearPendingRequest(pkg);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Stores a P2P-granted override expiry timestamp in SharedPreferences so
+     * AppBlockerModule can read it during blocking checks.
+     * Called from app/index.tsx when bare.js sends native:grantOverride.
+     */
+    @ReactMethod
+    public void grantOverride(String packageName, double expiresAt, Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        prefs.edit().putLong("pearguard_override_" + packageName, (long) expiresAt).apply();
+        promise.resolve(null);
+    }
+
+    /**
+     * Today's screen-time budget as enforcement actually sees it (#179). Computed
+     * from the same AppBlockerModule helpers the block decision uses, so the number
+     * the child and parent see can never drift from the number being enforced.
+     *
+     * Returns limitSeconds=0 when no cap is configured (the UI treats that as
+     * "unlimited" and shows nothing).
+     */
+    @ReactMethod
+    public void getScreenTimeStatus(Promise promise) {
+        try {
+            JSONObject policy = AppBlockerModule.loadPolicy(reactContext);
+            int base = policy == null ? 0 : policy.optInt("dailyScreenTimeLimitSeconds", 0);
+            WritableMap out = Arguments.createMap();
+            if (base <= 0) {
+                out.putInt("limitSeconds", 0);
+                out.putInt("bonusSeconds", 0);
+                out.putInt("usedSeconds", 0);
+                out.putInt("remainingSeconds", 0);
+                promise.resolve(out);
+                return;
+            }
+            int bonus = AppBlockerModule.getScreenTimeBonusSeconds(reactContext);
+            int used = AppBlockerModule.getTotalDailyUsageSeconds(reactContext, policy);
+            int limit = base + bonus;
+            out.putInt("limitSeconds", limit);
+            out.putInt("bonusSeconds", bonus);
+            out.putInt("usedSeconds", used);
+            out.putInt("remainingSeconds", Math.max(limit - used, 0));
+            promise.resolve(out);
+        } catch (Exception e) {
+            promise.reject("SCREEN_TIME_STATUS_FAILED", e);
+        }
+    }
+
+    /**
+     * Per-app daily limits and how much of each is left, for apps the parent has
+     * capped individually. Uses the same AppBlockerModule.getDailyUsageSeconds the
+     * block decision uses, so the countdown can't drift from enforcement.
+     *
+     * Category limits are deliberately excluded — they're a shared pool across
+     * several apps and don't map onto a single per-app countdown.
+     */
+    @ReactMethod
+    public void getAppLimitStatus(Promise promise) {
+        try {
+            WritableArray out = Arguments.createArray();
+            JSONObject policy = AppBlockerModule.loadPolicy(reactContext);
+            JSONObject apps = policy == null ? null : policy.optJSONObject("apps");
+            if (apps == null) { promise.resolve(out); return; }
+
+            java.util.Iterator<String> it = apps.keys();
+            while (it.hasNext()) {
+                String pkg = it.next();
+                JSONObject entry = apps.optJSONObject(pkg);
+                if (entry == null) continue;
+                int limit = entry.optInt("dailyLimitSeconds", 0);
+                if (limit <= 0) continue;
+                // A blocked/pending app has no meaningful countdown.
+                if (!"allowed".equals(entry.optString("status", "allowed"))) continue;
+
+                int used = AppBlockerModule.getDailyUsageSeconds(reactContext, pkg);
+                WritableMap row = Arguments.createMap();
+                row.putString("packageName", pkg);
+                row.putString("appName", entry.optString("appName", pkg));
+                row.putInt("limitSeconds", limit);
+                row.putInt("usedSeconds", used);
+                row.putInt("remainingSeconds", Math.max(limit - used, 0));
+                out.pushMap(row);
+            }
+            promise.resolve(out);
+        } catch (Exception e) {
+            promise.reject("APP_LIMIT_STATUS_FAILED", e);
+        }
+    }
+
+    /**
+     * Stores today's granted screen-time top-up (#179). Kept out of the policy JSON
+     * because the parent replaces that object wholesale on every policy:update.
+     * The date is a local YYYY-MM-DD stamp; AppBlockerModule ignores the bonus
+     * unless it matches the current local date, so a grant lapses at midnight and
+     * a rolled-back clock discards it.
+     *
+     * Called from app/index.tsx when bare.js sends native:setScreenTimeBonus.
+     */
+    @ReactMethod
+    public void setScreenTimeBonus(String date, double seconds, Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString("screentime_bonus_date", date)
+                .putInt("screentime_bonus_seconds", (int) seconds)
+                .apply();
+        // The budget just grew, so whatever is on screen is no longer blocked.
+        AppBlockerModule.dismissAll();
+        promise.resolve(null);
+    }
+
+    /**
+     * Dismisses the block overlay if it is currently showing for the given package.
+     * Called from app/index.tsx after a P2P override or policy update makes a package accessible.
+     * Delegates to AppBlockerModule.dismissIfShowing() which is a no-op if the service is not
+     * running or the overlay is showing a different package.
+     */
+    @ReactMethod
+    public void dismissOverlayForPackage(String packageName, Promise promise) {
+        AppBlockerModule.dismissIfShowing(packageName);
+        promise.resolve(null);
+    }
+
+    /**
+     * Dismisses any active block overlay unconditionally.
+     * Called from app/index.tsx on child:reset (unpair) so the overlay is cleared
+     * before navigating back to setup and the policy is wiped from SharedPreferences.
+     */
+    @ReactMethod
+    public void dismissAllOverlays(Promise promise) {
+        AppBlockerModule.dismissAll();
+        promise.resolve(null);
+    }
+
+    /**
+     * Full child state reset for Remove + Re-pair cycles. Clears:
+     *   - pearguard_policy (stored policy JSON)
+     *   - all pearguard_override_* (P2P-granted override expiry timestamps)
+     *   - in-memory overrides HashMap and pendingRequestPackages in AppBlockerModule
+     *
+     * Called from app/index.tsx on child:reset in place of the old setPolicy('') call.
+     * Using remove() instead of putString("", "") stores a true null so getString()
+     * returns the default null and loadPolicy() cleanly returns null.
+     */
+    @ReactMethod
+    public void clearChildState(Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.remove("pearguard_policy");
+        for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
+            if (entry.getKey().startsWith("pearguard_override_")) {
+                editor.remove(entry.getKey());
+            }
+        }
+        editor.apply();
+        AppBlockerModule.clearAllOverrides();
+        promise.resolve(null);
+    }
+
+    private static final String REQUEST_CHANNEL_ID = "pearguard_time_requests";
+    private static int notificationId = 2000;
+
+    /**
+     * Shows an Android notification on the parent device when a child requests access.
+     * Called from app/index.tsx when the bare worklet emits time:request:received.
+     */
+    @ReactMethod
+    public void showTimeRequestNotification(String childName, String appName, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID,
+                    "Child Time Requests",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Alerts when a child requests access to a blocked app");
+            nm.createNotificationChannel(channel);
+        }
+
+        PendingIntent pi = buildRequestsPendingIntent(childPublicKey, notificationId);
+
+        String title = childName + " is requesting access";
+        String body  = childName + " wants to use " + appName;
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Shows a notification on the parent device when enforcement stops working on a
+     * child's device. Title/body are composed on the JS side from the bypass reason
+     * (src/bypass-reasons.js) rather than hardcoded here: this used to always read
+     * "<child> turned off the PearGuard Accessibility Service", which is wrong for a
+     * desktop child (no such service exists there) and, worse, accuses the child of
+     * tampering even when the real cause is PearGuard being unable to enforce on
+     * their machine at all — e.g. an unsupported Wayland compositor.
+     *
+     * Called from app/index.tsx when the bare worklet emits alert:bypass.
+     */
+    @ReactMethod
+    public void showBypassAlertNotification(String title, String body, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID,
+                    "Child Time Requests",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            nm.createNotificationChannel(channel);
+        }
+
+        PendingIntent pi = buildAlertsPendingIntent(childPublicKey, notificationId);
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Shows a notification on the parent device when a child uses the PIN to bypass a block.
+     */
+    @ReactMethod
+    public void showPinOverrideNotification(String childName, String appName, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID,
+                    "Child Time Requests",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            nm.createNotificationChannel(channel);
+        }
+
+        PendingIntent pi = buildAlertsPendingIntent(childPublicKey, notificationId);
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(childName + " used PIN override")
+                .setContentText(childName + " bypassed " + appName + " using the PIN")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Shows a notification on the parent device when a child repeatedly enters the
+     * wrong override PIN and triggers a lockout. `detail` is composed on the JS side.
+     */
+    @ReactMethod
+    public void showPinFailureNotification(String childName, String detail, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID,
+                    "Child Time Requests",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            nm.createNotificationChannel(channel);
+        }
+
+        PendingIntent pi = buildAlertsPendingIntent(childPublicKey, notificationId);
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(childName + " is guessing the PIN")
+                .setContentText(detail)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    @ReactMethod
+    public void showDecisionNotification(String appName, String decision) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID,
+                    "Child Time Requests",
+                    NotificationManager.IMPORTANCE_HIGH
+            );
+            nm.createNotificationChannel(channel);
+        }
+
+        boolean approved = "approved".equals(decision);
+        String title = approved ? "Request approved" : "Request denied";
+        String text = approved
+                ? "Your parent allowed more time on " + appName
+                : "Your parent denied the request for " + appName;
+
+        // Deep link to child's Requests tab so tapping the notification is actionable
+        Intent intent = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("pear://pearguard/child-requests"));
+        intent.setPackage(reactContext.getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(
+                reactContext, notificationId, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Shows an app-installed notification. Works for both child device ("You installed…")
+     * and parent device ("Alice installed…") depending on the childName passed.
+     * Called from app/index.tsx when bare emits the app:installed event.
+     */
+    @ReactMethod
+    public void showAppInstalledNotification(String childName, String appName, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID, "Child Time Requests", NotificationManager.IMPORTANCE_HIGH);
+            nm.createNotificationChannel(channel);
+        }
+
+        boolean isSelf = "You".equals(childName);
+        String title = isSelf
+                ? "You installed " + appName
+                : childName + " installed " + appName;
+        String body = isSelf
+                ? appName + " has been installed on your device"
+                : appName + " is pending your approval";
+
+        // The parent's copy of this notification says the app "is pending your
+        // approval", so it must land ON the approval — the Activity inbox, where
+        // the Approve/Deny card now lives. It used to open the Apps tab, leaving
+        // the parent to hunt for the app they had just been told about.
+        // The child's own copy ("You installed X") has nothing to approve.
+        PendingIntent pi = isSelf
+                ? buildAppsTabPendingIntent(childPublicKey, notificationId)
+                : buildRequestsPendingIntent(childPublicKey, notificationId);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Shows an app-uninstalled notification. Works for both child and parent devices.
+     * Called from app/index.tsx when bare emits the app:uninstalled event.
+     */
+    @ReactMethod
+    public void showAppUninstalledNotification(String childName, String appName, String childPublicKey) {
+        NotificationManager nm =
+                (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    REQUEST_CHANNEL_ID, "Child Time Requests", NotificationManager.IMPORTANCE_HIGH);
+            nm.createNotificationChannel(channel);
+        }
+
+        boolean isSelf = "You".equals(childName);
+        String title = isSelf
+                ? "You uninstalled " + appName
+                : childName + " uninstalled " + appName;
+        String body = isSelf
+                ? appName + " has been removed from your device"
+                : appName + " has been removed from " + childName + "'s device";
+
+        PendingIntent pi = buildAlertsPendingIntent(childPublicKey, notificationId);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi);
+
+        nm.notify(notificationId++, builder.build());
+    }
+
+    /**
+     * Called from index.tsx when a heartbeat:received event arrives from a child.
+     * Saves the child's last-seen timestamp and display name to SharedPreferences so
+     * ParentConnectionService can detect stale heartbeats (enforcement stopped).
+     * Also clears the stale-notification flag so we re-notify if the child goes offline again.
+     */
+    @ReactMethod
+    public void updateChildHeartbeat(String childPublicKey, String displayName, double timestamp) {
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("heartbeat_last_" + childPublicKey, (long) timestamp)
+            .putString("heartbeat_name_" + childPublicKey, displayName)
+            .putBoolean("heartbeat_notified_" + childPublicKey, false)
+            .apply();
+    }
+
+    /**
+     * Prunes heartbeat SharedPreferences entries for any child whose key is
+     * not in the supplied paired-keys list. Called at startup to clean up
+     * stale entries left behind by unpairs that happened before #146's fix.
+     */
+    @ReactMethod
+    public void pruneStaleHeartbeats(ReadableArray pairedKeys) {
+        java.util.HashSet<String> paired = new java.util.HashSet<>();
+        for (int i = 0; i < pairedKeys.size(); i++) {
+            String k = pairedKeys.getString(i);
+            if (k != null) paired.add(k);
+        }
+        SharedPreferences prefs = reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        NotificationManager nm =
+            (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        for (String key : prefs.getAll().keySet()) {
+            String childKey = null;
+            if (key.startsWith("heartbeat_last_")) childKey = key.substring("heartbeat_last_".length());
+            else if (key.startsWith("heartbeat_name_")) childKey = key.substring("heartbeat_name_".length());
+            else if (key.startsWith("heartbeat_notified_at_")) childKey = key.substring("heartbeat_notified_at_".length());
+            else if (key.startsWith("heartbeat_notified_")) childKey = key.substring("heartbeat_notified_".length());
+            if (childKey != null && !paired.contains(childKey)) {
+                editor.remove(key);
+                if (nm != null) nm.cancel(9000 + Math.abs(childKey.hashCode() % 500));
+            }
+        }
+        editor.apply();
+    }
+
+    /**
+     * Clears heartbeat tracking for a child (called on unpair). Removes the
+     * SharedPreferences entries so ParentConnectionService no longer fires
+     * "device has not checked in" notifications for a peer that is no longer
+     * paired, and cancels any currently-posted offline notification.
+     */
+    @ReactMethod
+    public void clearChildHeartbeat(String childPublicKey) {
+        if (childPublicKey == null) return;
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .remove("heartbeat_last_" + childPublicKey)
+            .remove("heartbeat_name_" + childPublicKey)
+            .remove("heartbeat_notified_" + childPublicKey)
+            .remove("heartbeat_notified_at_" + childPublicKey)
+            .apply();
+        NotificationManager nm =
+            (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.cancel(9000 + Math.abs(childPublicKey.hashCode() % 500));
+        }
+    }
+
+    /**
+     * Shows a high-priority notification when a child's heartbeat goes stale,
+     * indicating PearGuard may have been force-closed on their device.
+     */
+    @ReactMethod
+    public void showEnforcementOfflineNotification(String childName, String childPublicKey) {
+        NotificationManager nm =
+            (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                "pearguard_offline", "PearGuard Offline Alerts",
+                NotificationManager.IMPORTANCE_HIGH);
+            ch.setShowBadge(true);
+            nm.createNotificationChannel(ch);
+        }
+
+        PendingIntent pi = buildAlertsPendingIntent(childPublicKey, 8000 + childPublicKey.hashCode());
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext, "pearguard_offline")
+            .setContentTitle("PearGuard enforcement may be off")
+            .setContentText(childName + "'s device has not checked in — PearGuard may have been force-closed or app data cleared.")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH);
+
+        nm.notify(9000 + Math.abs(childPublicKey.hashCode() % 500), builder.build());
+    }
+
+    /**
+     * Clears the EnforcementService heartbeat timestamp after the child fires a
+     * force_stopped bypass:detected. Prevents the detection from re-triggering on
+     * subsequent Root remounts before EnforcementService writes a fresh heartbeat.
+     */
+    @ReactMethod
+    public void clearEnforcementHeartbeat() {
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("enforcement_heartbeat_ms", 0)
+            .apply();
+    }
+
+    /**
+     * Starts ParentConnectionService, keeping Hyperswarm alive while the app is backgrounded.
+     * Safe to call multiple times — Android deduplicates startForegroundService calls.
+     */
+    @ReactMethod
+    public void startParentService() {
+        // Persist the role so BootReceiverModule restarts ParentConnectionService
+        // (and NOT the child's EnforcementService) after a reboot.
+        reactContext.getSharedPreferences("PearGuardPrefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("pearguard_mode", "parent")
+            .apply();
+
+        Intent intent = new Intent(reactContext, ParentConnectionService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            reactContext.startForegroundService(intent);
+        } else {
+            reactContext.startService(intent);
+        }
+    }
+
+    /**
+     * Stops the ParentConnectionService. Called when the device is in child mode
+     * or when the user logs out, to avoid a stale foreground notification.
+     */
+    @ReactMethod
+    public void stopParentService() {
+        Intent intent = new Intent(reactContext, ParentConnectionService.class);
+        reactContext.stopService(intent);
+    }
+
+    /**
+     * Returns and clears the pending notification navigation URL stored by
+     * MainActivity.interceptNotificationDeepLink().  Called by index.tsx when
+     * the app comes to the foreground so it can navigate the WebView.
+     */
+    @ReactMethod
+    public void consumePendingNavigation(Promise promise) {
+        SharedPreferences prefs = reactContext.getSharedPreferences("pearguard_nav", Context.MODE_PRIVATE);
+        String url = prefs.getString("pendingNavUrl", null);
+        if (url != null) {
+            prefs.edit().remove("pendingNavUrl").apply();
+            promise.resolve(url);
+        } else {
+            promise.resolve(null);
+        }
+    }
+
+    @ReactMethod
+    public void getLastForegroundPackage(Promise promise) {
+        promise.resolve(AppBlockerModule.getLastForegroundPackage());
+    }
+
+    @SuppressWarnings("deprecation")
+    @ReactMethod
+    public void hapticTap() {
+        Vibrator v = (Vibrator) reactContext.getSystemService(Context.VIBRATOR_SERVICE);
+        if (v == null || !v.hasVibrator()) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (v.hasAmplitudeControl()) {
+                v.vibrate(VibrationEffect.createOneShot(20, 80));
+            } else {
+                v.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE));
+            }
+        } else {
+            v.vibrate(50);
+        }
+    }
+
+    /**
+     * Builds a PendingIntent that deep-links to the child's Activity tab in PearGuard.
+     * URL: pear://pearguard/alerts?childPublicKey=<key>
+     */
+    private PendingIntent buildAlertsPendingIntent(String childPublicKey, int reqCode) {
+        String url = "pear://pearguard/alerts?childPublicKey=" +
+                Uri.encode(childPublicKey != null ? childPublicKey : "");
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.setPackage(reactContext.getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(
+                reactContext, reqCode, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_CANCEL_CURRENT
+        );
+    }
+
+    /**
+     * Builds a PendingIntent that deep-links to the child's Activity tab in PearGuard.
+     * URL: pear://pearguard/alerts?childPublicKey=<key>&tab=activity
+     */
+    private PendingIntent buildRequestsPendingIntent(String childPublicKey, int reqCode) {
+        String url = "pear://pearguard/alerts?childPublicKey=" +
+                Uri.encode(childPublicKey != null ? childPublicKey : "") + "&tab=activity";
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.setPackage(reactContext.getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(
+                reactContext, reqCode, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_CANCEL_CURRENT
+        );
+    }
+
+    /**
+     * Builds a PendingIntent that deep-links to the child's Apps tab in PearGuard.
+     * URL: pear://pearguard/alerts?childPublicKey=<key>&tab=apps
+     */
+    private PendingIntent buildAppsTabPendingIntent(String childPublicKey, int reqCode) {
+        String url = "pear://pearguard/alerts?childPublicKey=" +
+                Uri.encode(childPublicKey != null ? childPublicKey : "") + "&tab=apps";
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.setPackage(reactContext.getPackageName());
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(
+                reactContext, reqCode, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_CANCEL_CURRENT
+        );
+    }
+}

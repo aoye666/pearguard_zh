@@ -1,0 +1,6 @@
+## What's Changed
+
+### 🔧 Other
+
+- restyle settings buttons
+
