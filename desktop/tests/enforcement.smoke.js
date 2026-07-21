@@ -2628,14 +2628,14 @@ test('linux parseDesktopFile reads [Desktop Entry] and ignores locale keys', () 
   const fields = linuxEnum.parseDesktopFile([
     '[Desktop Entry]',
     'Type=Application',
-    'Name=PearGuard',
+    'Name=亲近守护',
     'Name[de]=Birnenwache',  // locale-suffixed; should be skipped
     'Exec=pearguard',
     '',
     '[Desktop Action New]',
     'Name=ShouldBeIgnored',
   ].join('\n'))
-  assert.strictEqual(fields.Name, 'PearGuard')
+  assert.strictEqual(fields.Name, '亲近守护')
   assert.strictEqual(fields.Exec, 'pearguard')
   assert.strictEqual(fields.Type, 'Application')
   // Make sure the action subgroup didn't bleed into the main fields.
@@ -3026,7 +3026,7 @@ const { GnomeExtensionWatchdog, extractState } = require('../src/main/gnome-exte
 
 test('extractState parses gnome-extensions info output', () => {
   const out = [
-    '  Name: PearGuard Focus Reporter',
+    '  Name: 亲近守护 Focus Reporter',
     '  UUID: pearguard-focus@peerloomllc.com',
     '  Version: 1',
     '  Enabled: Yes',
@@ -3559,7 +3559,7 @@ test('extractEnabled parses the Enabled: line', () => {
 })
 
 // THE bug, reproduced: this is the exact state observed on the live Debian child
-// (Enabled: Yes, State: INACTIVE) that pushed "Ben disabled PearGuard's
+// (Enabled: Yes, State: INACTIVE) that pushed "Ben disabled 亲近守护's
 // app-blocking extension" to the parent. Ben had done nothing.
 test('enabled-but-INACTIVE is NOT tampering (the false accusation)', () => {
   assert.strictEqual(classifyFailure('INACTIVE', true), 'extension-not-loaded')

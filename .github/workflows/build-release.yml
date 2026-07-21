@@ -81,7 +81,7 @@ jobs:
       - name: Create Release
         run: |
           cat > release-notes.md <<-EOF
-          ## PearGuard ${{ github.ref_name }}
+          ## 亲近守护 ${{ github.ref_name }}
 
           ### 下载
           - [Android APK](pearguard-${{ github.ref_name }}.apk)

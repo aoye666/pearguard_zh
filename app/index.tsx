@@ -23,14 +23,14 @@ import { setBareCaller } from './setup'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import Constants from 'expo-constants'
 // Shared with the worklet so parent-facing bypass wording stays truthful:
-// some reasons are tampering, others are PearGuard's own limitation.
+// some reasons are tampering, others are 亲近守护's own limitation.
 import { describeBypassReason } from '../src/bypass-reasons'
 // Bounded seq-keyed buffer of recent Bare→WebView events, replayed on every
 // WebView (re)load so a reloaded context catches up on events it missed.
 import { ReplayBuffer } from '../src/webview-replay'
 
 const isAndroid = Platform.OS === 'android'
-const { PearGuardNotifications, PearGuardHaptic, PearGuardBGSync, PearGuardLink, PearGuardCamera } = NativeModules
+const { 亲近守护Notifications, 亲近守护Haptic, 亲近守护BGSync, 亲近守护Link, 亲近守护Camera } = NativeModules
 
 // ── Worklet singleton ─────────────────────────────────────────────────────────
 // The worklet must survive re-renders and navigation — keep it in module scope.
@@ -163,7 +163,7 @@ async function pushHeartbeatDataOnce () {
       NativeModules.UsageStatsModule?.getDailyUsageAllEvents?.(),
       NativeModules.UsageStatsModule?.getLastForegroundPackage?.(),
       // Enforced budget (#179). Distinct from the raw sum below, which counts
-      // PearGuard, phone/messaging and screen-time-exempt apps.
+      // 亲近守护, phone/messaging and screen-time-exempt apps.
       NativeModules.UsageStatsModule?.getScreenTimeStatus?.().catch(() => null),
       NativeModules.UsageStatsModule?.getAppLimitStatus?.().catch(() => null),
     ])
@@ -173,7 +173,7 @@ async function pushHeartbeatDataOnce () {
     const currentApp = foregroundEntry ? foregroundEntry.appName : null
     sendToWorklet({ method: 'heartbeat:updateData', args: { currentApp, currentAppPackage: currentAppPackage || null, todayScreenTimeSeconds, screenTime: screenTime || null, appLimits: appLimits || null } })
   } catch (e) {
-    console.warn('[PearGuard] heartbeat data push failed:', e)
+    console.warn('[亲近守护] heartbeat data push failed:', e)
   }
 }
 
@@ -321,7 +321,7 @@ const scannerStyles = StyleSheet.create({
 
 function showNotification(title: string, body: string, childPublicKey?: string, tab?: string) {
   if (isAndroid) return
-  PearGuardNotifications?.postNow?.({ title, body, childPublicKey: childPublicKey ?? '', tab: tab ?? '' }).catch?.(() => {})
+  亲近守护Notifications?.postNow?.({ title, body, childPublicKey: childPublicKey ?? '', tab: tab ?? '' }).catch?.(() => {})
 }
 
 // ── Root component ────────────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ export default function Root () {
         if (isAndroid) {
           NativeModules.UsageStatsModule?.hapticTap?.()
         } else {
-          PearGuardHaptic?.impact?.('light')
+          亲近守护Haptic?.impact?.('light')
         }
         webViewRef.current?.injectJavaScript(
           'window.__pearResponse(' + msg.id + ', null);true;'
@@ -433,11 +433,11 @@ export default function Root () {
           try {
             const { filename, content, mimeType } = msg.args || {}
             if (!filename || typeof content !== 'string') throw new Error('file:save missing filename or content')
-            if (isAndroid && NativeModules.PearGuardDownloads?.saveToDownloads) {
-              const path = await NativeModules.PearGuardDownloads.saveToDownloads(
+            if (isAndroid && NativeModules.亲近守护Downloads?.saveToDownloads) {
+              const path = await NativeModules.亲近守护Downloads.saveToDownloads(
                 filename, content, mimeType || 'application/json'
               )
-              NativeModules.PearGuardDownloads.showToast('Saved to ' + path, true)
+              NativeModules.亲近守护Downloads.showToast('Saved to ' + path, true)
               webViewRef.current?.injectJavaScript(
                 'window.__pearResponse(' + msg.id + ', ' + JSON.stringify({ ok: true, path }) + ');true;'
               )
@@ -564,14 +564,14 @@ export default function Root () {
         const msgId = msg.id
         ;(async () => {
           try {
-            if (!PearGuardCamera?.capture) {
+            if (!亲近守护Camera?.capture) {
               webViewRef.current?.injectJavaScript(
                 'window.__pearResponse(' + msgId + ', null, "camera unavailable");true;'
               )
               return
             }
             // Native module shows a single picker with both Camera and Gallery options.
-            const dataUrl: string = await PearGuardCamera.capture()
+            const dataUrl: string = await 亲近守护Camera.capture()
             // dataUrl is "data:<mime>;base64,<data>"
             const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/)
             if (!match) {
@@ -703,11 +703,11 @@ export default function Root () {
             }
           } else {
             // iOS: check for pending background sync
-            PearGuardBGSync?.checkPendingBGSync?.().then((pending: boolean) => {
+            亲近守护BGSync?.checkPendingBGSync?.().then((pending: boolean) => {
               if (pending) sendToWorklet({ method: 'swarm:reconnect' })
             }).catch?.(() => {})
             // iOS: check for pending notification navigation
-            PearGuardLink?.getPendingNav?.().then((nav: { childPublicKey: string; tab: string } | null) => {
+            亲近守护Link?.getPendingNav?.().then((nav: { childPublicKey: string; tab: string } | null) => {
               if (nav && _webViewLoaded) {
                 _injectToWebView?.(`window.__pendingAlertsNav=${JSON.stringify(nav)};true;`)
                 setTimeout(() => {
@@ -766,7 +766,7 @@ export default function Root () {
               }
               await NativeModules.UsageStatsModule.clearQueuedTimeRequests()
             } catch (err) {
-              console.warn('[PearGuard] Time-request drain failed:', err)
+              console.warn('[亲近守护] Time-request drain failed:', err)
             }
           }),
 
@@ -805,7 +805,7 @@ export default function Root () {
               ])
               sendToWorklet({ method: 'usage:flush', args: { usage: usageList, weekly: weeklyList, foregroundPackage: foregroundPkg, sessions: sessionsList, dailyTotals } })
             } catch (err) {
-              console.warn('[PearGuard] Usage flush failed:', err)
+              console.warn('[亲近守护] Usage flush failed:', err)
             }
           }),
 
@@ -824,8 +824,8 @@ export default function Root () {
 
       // iOS: listen for notification taps via NativeEventEmitter (fires even when
       // app is already in foreground, unlike AppState which only fires on bg->fg)
-      if (!isAndroid && PearGuardLink) {
-        const linkEmitter = new NativeEventEmitter(PearGuardLink)
+      if (!isAndroid && 亲近守护Link) {
+        const linkEmitter = new NativeEventEmitter(亲近守护Link)
         const sub = linkEmitter.addListener('notificationTapped', (nav: { childPublicKey: string; tab: string }) => {
           if (!nav?.childPublicKey) return
           if (_webViewLoaded) {
@@ -951,7 +951,7 @@ export default function Root () {
               }
               // Tell the parent enforcement is off on a child's device. The text is
               // derived from the reason: some reasons are real tampering, but others
-              // (e.g. an unsupported Wayland compositor) are PearGuard's own
+              // (e.g. an unsupported Wayland compositor) are 亲近守护's own
               // limitation, and blaming the child for those would be a false
               // accusation. See src/bypass-reasons.js.
               if (msg.event === 'alert:bypass') {
@@ -1053,7 +1053,7 @@ export default function Root () {
               }
               // iOS: complete background sync task on successful P2P activity
               if (!isAndroid && (msg.event === 'peer:connected' || msg.event === 'child:connected' || msg.event === 'usage:received' || msg.event === 'policy:synced')) {
-                PearGuardBGSync?.completeBGSync?.(true)
+                亲近守护BGSync?.completeBGSync?.(true)
               }
               ;(_eventHandlers.get(msg.event) ?? []).forEach(fn => fn(msg.data))
             } else if (msg.method === 'native:setPolicy') {
@@ -1119,7 +1119,7 @@ export default function Root () {
           _pendingInviteUrl = null
         }
         if (!data.mode) {
-          const ssScene = ((NativeModules as any).PearGuardScreenshot?.scene ?? 0)
+          const ssScene = ((NativeModules as any).亲近守护Screenshot?.scene ?? 0)
           if (ssScene <= 0) {
             setTimeout(() => router.replace('/setup'), 500)
           }
@@ -1136,7 +1136,7 @@ export default function Root () {
           } else {
             // Background sync scheduling happens in AppDelegate on launch.
             // Check if a pending background task woke us - if so, trigger reconnect.
-            PearGuardBGSync?.checkPendingBGSync?.().then((pending: boolean) => {
+            亲近守护BGSync?.checkPendingBGSync?.().then((pending: boolean) => {
               if (pending) sendToWorklet({ method: 'swarm:reconnect' })
             }).catch?.(() => {})
           }
@@ -1189,14 +1189,14 @@ export default function Root () {
               const todayMs = startOfToday.getTime()
               const fresh = reports.filter((r: { timestamp?: number }) => (r.timestamp || 0) >= todayMs)
               const staleCount = reports.length - fresh.length
-              if (staleCount > 0) console.log('[PearGuard] Dropping', staleCount, 'stale queued usage reports (pre-midnight)')
-              console.log('[PearGuard] Flushing', fresh.length, 'queued usage reports')
+              if (staleCount > 0) console.log('[亲近守护] Dropping', staleCount, 'stale queued usage reports (pre-midnight)')
+              console.log('[亲近守护] Flushing', fresh.length, 'queued usage reports')
               for (const report of fresh) {
                 sendToWorklet({ method: 'usage:flush', args: { usage: report.usage, queued: true } })
               }
               NativeModules.UsageStatsModule?.clearQueuedReports?.()
             })
-            .catch((e: unknown) => console.warn('[PearGuard] Queue flush failed:', e))
+            .catch((e: unknown) => console.warn('[亲近守护] Queue flush failed:', e))
         }
       })
 
@@ -1289,7 +1289,7 @@ export default function Root () {
   // Screenshot mode: the native ScreenshotModule exposes a non-zero scene,
   // bypass the dbReady gate so the WebView renders fixtures without waiting
   // on the bare worklet handshake.
-  const _ssScene = ((NativeModules as any).PearGuardScreenshot?.scene ?? 0)
+  const _ssScene = ((NativeModules as any).亲近守护Screenshot?.scene ?? 0)
   if (!html || (!dbReady && _ssScene <= 0)) {
     return <View style={styles.loading} />
   }
@@ -1302,7 +1302,7 @@ export default function Root () {
         style={styles.webview}
         onMessage={onWebViewMessage}
         injectedJavaScriptBeforeContentLoaded={`window.__pearPlatform=${JSON.stringify(Platform.OS)};window.__pearVersion=${JSON.stringify(Constants.expoConfig?.version ?? '')};${_pendingAlertsNav ? `window.__pendingAlertsNav=${JSON.stringify(_pendingAlertsNav)};` : ''}${(() => {
-          const mod = (NativeModules as any).PearGuardScreenshot
+          const mod = (NativeModules as any).亲近守护Screenshot
           const scene = mod?.scene ?? 0
           const dark = mod?.dark ?? -1
           if (scene <= 0) return ''
@@ -1359,7 +1359,7 @@ export default function Root () {
           }
           // iOS: check for pending notification navigation from LinkModule
           if (!isAndroid) {
-            PearGuardLink?.getPendingNav?.().then((nav: { childPublicKey: string; tab: string } | null) => {
+            亲近守护Link?.getPendingNav?.().then((nav: { childPublicKey: string; tab: string } | null) => {
               if (nav) {
                 webViewRef.current?.injectJavaScript(`window.__pendingAlertsNav=${JSON.stringify(nav)};true;`)
                 setTimeout(() => {
@@ -1369,7 +1369,7 @@ export default function Root () {
                 }, 200)
               }
             }).catch?.(() => {})
-            PearGuardLink?.getPendingLink?.().then((url: string | null) => {
+            亲近守护Link?.getPendingLink?.().then((url: string | null) => {
               if (url && url.includes('/join')) {
                 sendToWorklet({ method: 'acceptInvite', args: [url] })
               }

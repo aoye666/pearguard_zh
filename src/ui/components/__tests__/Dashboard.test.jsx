@@ -37,7 +37,7 @@ test('shows welcome message and add child button when no children', async () => 
   window.callBare.mockResolvedValue([]);
   render(<Dashboard />);
   await waitFor(() => {
-    expect(screen.getByText(/Welcome to PearGuard/)).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to 亲近守护/)).toBeInTheDocument();
   });
   expect(screen.getByRole('button', { name: /Add Child/ })).toBeInTheDocument();
 });

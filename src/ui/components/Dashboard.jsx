@@ -254,7 +254,7 @@ export default forwardRef(function Dashboard(_props, ref) {
         <div style={{ textAlign: 'center', padding: `${spacing.xxxl}px ${spacing.base}px` }}>
           <Icon name="Users" size={48} color={colors.text.muted} />
           <p style={{ ...typography.body, color: colors.text.secondary, marginTop: `${spacing.md}px` }}>
-            {t('Welcome to PearGuard')}
+            {t('Welcome to 亲近守护')}
           </p>
           <p style={{ ...typography.caption, color: colors.text.muted, marginBottom: `${spacing.xl}px` }}>
             {t('Add your first child to get started')}

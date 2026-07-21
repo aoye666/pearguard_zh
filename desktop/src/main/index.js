@@ -109,7 +109,7 @@ const NOTIFICATION_ICON_PATH = process.platform === 'win32'
 // Windows derives the toast's "app name" header from the AppUserModelID.
 // electron-builder's NSIS stamps the Start Menu shortcut with build.appId
 // (com.peerloomllc.pearguard), so setting the same AUMID here makes Windows
-// show "PearGuard" in toasts instead of the default "electron.app.PearGuard".
+// show "亲近守护" in toasts instead of the default "electron.app.亲近守护".
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.peerloomllc.pearguard')
 }
@@ -167,7 +167,7 @@ shim.onBareOut((buf) => {
     if (msg.method === 'native:showDecisionNotification') {
       const { appName, decision } = msg.args || {}
       new Notification({
-        title: 'PearGuard',
+        title: '亲近守护',
         body: `${appName || 'App'}: ${decision || ''}`,
         icon: NOTIFICATION_ICON_PATH,
       }).show()
@@ -386,9 +386,9 @@ function createTray() {
     console.error('[main] tray create failed:', e.message, 'path=', iconPath)
     return
   }
-  tray.setToolTip('PearGuard')
+  tray.setToolTip('亲近守护')
   const menu = Menu.buildFromTemplate([
-    { label: 'Open PearGuard', click: showMainWindow },
+    { label: 'Open 亲近守护', click: showMainWindow },
   ])
   tray.setContextMenu(menu)
   tray.on('click', showMainWindow)
@@ -400,7 +400,7 @@ function createWindow() {
     height: 760,
     minWidth: 360,
     minHeight: 640,
-    title: 'PearGuard',
+    title: '亲近守护',
     webPreferences: {
       preload: path.join(__dirname, '..', 'renderer', 'preload.js'),
       contextIsolation: false,
@@ -500,7 +500,7 @@ app.whenReady().then(() => {
   // === false) skip this so running `npm start` doesn't register the dev binary.
   // Linux's setLoginItemSettings is a no-op; we hand-roll a .desktop file under
   // ~/.config/autostart/ instead. Re-asserted on every startup so a kid
-  // deleting the entry sees it return as soon as they re-open PearGuard.
+  // deleting the entry sees it return as soon as they re-open 亲近守护.
   if (app.isPackaged) {
     if (process.platform === 'linux') {
       try {
@@ -583,7 +583,7 @@ app.whenReady().then(() => {
     }
   }
 
-  // Watchdog: register a scheduled task that relaunches PearGuard every two
+  // Watchdog: register a scheduled task that relaunches 亲近守护 every two
   // minutes if it isn't running. Registering from the app (rather than NSIS)
   // means the task runs under the interactive user's account, so the relaunched
   // process is visible in their session. Re-registered on every startup so a
@@ -751,8 +751,8 @@ app.whenReady().then(() => {
     // (pearguard-v<version>.exe, pearguard-v<version>.AppImage — the build's
     // artifactName), so their basename changes every release and is never in the
     // seen-set. When one briefly takes foreground during a self-update it would
-    // otherwise fire app-first-seen and relay app:installed for PearGuard itself,
-    // surfacing PearGuard in the parent's (and child's) approval list. Match the
+    // otherwise fire app-first-seen and relay app:installed for 亲近守护 itself,
+    // surfacing 亲近守护 in the parent's (and child's) approval list. Match the
     // whole family by prefix so any version is suppressed. No third-party app is
     // named "pearguard", so this can't over-suppress.
     const SELF_EXE_RE = /^pearguard([-_. ]|$)/i
@@ -763,10 +763,10 @@ app.whenReady().then(() => {
     // and relay it to the parent with enough metadata to show a meaningful
     // Activity notification.
     enforcement.monitor.on('app-first-seen', async ({ exePath, exeBasename, title }) => {
-      // Never relay a sighting of PearGuard's own running app, update installer
+      // Never relay a sighting of 亲近守护's own running app, update installer
       // or updater binary (version-stamped, so markSeen can't pre-cover them).
       if (exeBasename && SELF_EXE_RE.test(exeBasename)) {
-        console.log('[main] app:installed suppressed for PearGuard self/updater binary', { exeBasename })
+        console.log('[main] app:installed suppressed for 亲近守护 self/updater binary', { exeBasename })
         return
       }
       try {
@@ -1028,7 +1028,7 @@ async function reportLinuxEnforcementCapability() {
   // Only meaningful when enabled AND unlocked; assess() enforces that itself.
   //
   // Probe several times before concluding the extension is dead. Rewriting the
-  // extension's files (which happens on any PearGuard update that touches it)
+  // extension's files (which happens on any 亲近守护 update that touches it)
   // makes GNOME briefly drop and re-register the D-Bus name, and the Shell can
   // take a few seconds to settle after login. A single probe landing in that
   // window reports "ENFORCEMENT IS NOT WORKING" and pushes a bogus alert to the

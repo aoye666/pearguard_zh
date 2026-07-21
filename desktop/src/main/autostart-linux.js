@@ -25,7 +25,7 @@ function autostartPath() {
 // Build the .desktop body. execPath under an AppImage points at the mounted
 // runtime, which goes stale on the next update; APPIMAGE (set by the AppImage
 // runtime) is the stable path on disk, so we prefer that when present.
-function buildDesktopEntry({ execPath, appName = 'PearGuard' } = {}) {
+function buildDesktopEntry({ execPath, appName = '亲近守护' } = {}) {
   const exe = process.env.APPIMAGE || execPath
   if (!exe) throw new Error('no exec path for autostart entry')
   return [
@@ -37,7 +37,7 @@ function buildDesktopEntry({ execPath, appName = 'PearGuard' } = {}) {
     'X-GNOME-Autostart-enabled=true',
     'Hidden=false',
     'NoDisplay=false',
-    'Comment=PearGuard child device client',
+    'Comment=亲近守护 child device client',
     '',
   ].join('\n')
 }

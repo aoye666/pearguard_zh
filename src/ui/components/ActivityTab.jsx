@@ -11,7 +11,7 @@ const TYPE_META = {
   // Enforcement is off, but the child did not do it (an extension that failed to
   // load, an unsupported compositor). Same urgency, no accusation - badging these
   // as a "Bypass Attempt" in red told parents their kid defeated protection when
-  // PearGuard had simply failed. See src/bypass-reasons.js.
+  // 亲近守护 had simply failed. See src/bypass-reasons.js.
   enforcement_off: { label: t('Protection Off'),   icon: 'Warning' },
   pin_use:         { label: t('PIN Used'),         icon: 'LockSimpleOpen' },
   time_request:    { label: t('Time Request'),     icon: 'Clock' },

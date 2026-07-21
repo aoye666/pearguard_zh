@@ -37,10 +37,10 @@ function DonationReminderModal({ onDonate, onDismiss }) {
           <Icon name="Lightning" size={32} color={colors.primary} />
         </div>
         <h2 style={{ ...typography.heading, color: colors.text.primary, marginBottom: `${spacing.sm}px`, marginTop: 0 }}>
-          Enjoying PearGuard?
+          Enjoying 亲近守护?
         </h2>
         <p style={{ ...typography.body, color: colors.text.secondary, marginBottom: `${spacing.xl}px`, marginTop: 0, lineHeight: '1.6' }}>
-          PearGuard is free and open source with no ads or subscriptions.
+          亲近守护 is free and open source with no ads or subscriptions.
           If you've received value from it, consider returning value to support development.
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: `${spacing.sm}px` }}>
@@ -90,7 +90,7 @@ function WelcomeCard({ onDismiss }) {
       }}>
         <Icon name="Shield" size={36} color={colors.primary} />
         <h2 style={{ ...typography.heading, color: colors.text.primary, marginTop: `${spacing.md}px`, marginBottom: `${spacing.sm}px` }}>
-          Welcome to PearGuard
+          Welcome to 亲近守护
         </h2>
         <p style={{ ...typography.body, color: colors.text.secondary, lineHeight: '1.5', marginTop: 0, marginBottom: `${spacing.xl}px` }}>
           A private parental control app that runs peer-to-peer between your device and your child's. No servers, no accounts, no data collected.

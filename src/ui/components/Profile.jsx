@@ -174,7 +174,7 @@ export default function Profile({ mode }) {
       const invite = await window.callBare('child-invite:generate')
       if (!invite?.inviteLink) return
       await window.callBare('share:text', {
-        text: t('Tap this link on the parent device to pair with PearGuard:\n\n') + invite.inviteLink,
+        text: t('Tap this link on the parent device to pair with 亲近守护:\n\n') + invite.inviteLink,
       })
     } catch {
       // silently fail; user can retry

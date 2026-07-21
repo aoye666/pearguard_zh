@@ -1,6 +1,6 @@
 // src/ui/locales/index.js
 //
-// Lightweight i18n for PearGuard.
+// Lightweight i18n for 亲近守护.
 // Add a locale file (e.g. zh-CN.js) and switch with setLocale().
 // Falls back to en.js when a key is missing from the active locale.
 //

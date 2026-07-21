@@ -1,7 +1,7 @@
 {
   "name": "pearguard-desktop",
   "version": "1.0.16",
-  "description": "PearGuard desktop child client",
+  "description": "亲近守护 desktop child client",
   "homepage": "https://github.com/peerloomllc/pearguard",
   "author": {
     "name": "PeerLoom LLC",
@@ -47,7 +47,7 @@
   },
   "build": {
     "appId": "com.peerloomllc.pearguard",
-    "productName": "PearGuard",
+    "productName": "亲近守护",
     "npmRebuild": false,
     "afterPack": "build/afterPack.js",
     "directories": {
@@ -112,13 +112,13 @@
       ],
       "icon": "build/icon.png",
       "category": "Utility",
-      "synopsis": "PearGuard child device client",
+      "synopsis": "亲近守护 child device client",
       "description": "Peer-to-peer parental control child client. Pairs with a parent device over Hyperswarm and reports activity.",
       "artifactName": "pearguard-v${version}.${ext}",
       "executableName": "pearguard",
       "desktop": {
-        "Name": "PearGuard",
-        "StartupWMClass": "PearGuard"
+        "Name": "亲近守护",
+        "StartupWMClass": "亲近守护"
       },
       "extraResources": [
         {

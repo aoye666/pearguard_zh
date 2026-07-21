@@ -52,10 +52,10 @@ const PERMISSION_STEPS = {
     Icon: IconAccessibility,
     title: 'Enable Accessibility Service',
     description:
-      'PearGuard uses the Accessibility Service to enforce parental control rules on this device. When a restricted app is opened, PearGuard detects it and closes it. PearGuard does not read screen content, does not log keystrokes and does not send any Accessibility data off this device. Only the list of allowed and blocked apps is synced peer-to-peer with the paired parent device.',
+      '亲近守护 uses the Accessibility Service to enforce parental control rules on this device. When a restricted app is opened, 亲近守护 detects it and closes it. 亲近守护 does not read screen content, does not log keystrokes and does not send any Accessibility data off this device. Only the list of allowed and blocked apps is synced peer-to-peer with the paired parent device.',
     instructions: [
       'Tap the button below',
-      'Find PearGuard in the list',
+      'Find 亲近守护 in the list',
       'Toggle it ON',
       'Return to this app',
     ],
@@ -66,10 +66,10 @@ const PERMISSION_STEPS = {
     Icon: IconUsage,
     title: 'Grant Usage Access',
     description:
-      'PearGuard needs Usage Access to track daily app time and enforce screen time limits set by your parent.',
+      '亲近守护 needs Usage Access to track daily app time and enforce screen time limits set by your parent.',
     instructions: [
       'Tap the button below',
-      'Find PearGuard in the list',
+      'Find 亲近守护 in the list',
       'Toggle it ON',
       'Return to this app',
     ],
@@ -80,7 +80,7 @@ const PERMISSION_STEPS = {
     Icon: IconBattery,
     title: 'Allow background running',
     description:
-      'When this phone has been idle for a while (in your bag or at school), Android pauses background apps to save battery. PearGuard needs an exemption so it can stay connected to your parent and keep enforcement running. Without this, your parent may stop receiving updates after a few hours of screen-off time.',
+      'When this phone has been idle for a while (in your bag or at school), Android pauses background apps to save battery. 亲近守护 needs an exemption so it can stay connected to your parent and keep enforcement running. Without this, your parent may stop receiving updates after a few hours of screen-off time.',
     instructions: [
       'Tap the button below',
       'Tap "Allow" on the dialog',
@@ -243,7 +243,7 @@ export default function ChildSetupScreen() {
   async function handleScanned(url: string) {
     setShowScanner(false)
     if (!url.startsWith('pear://pearguard/join')) {
-      setPairError('That QR code is not a valid PearGuard invite. Ask your parent to share their invite again.')
+      setPairError('That QR code is not a valid 亲近守护 invite. Ask your parent to share their invite again.')
       return
     }
     setPairError(null)
@@ -327,7 +327,7 @@ export default function ChildSetupScreen() {
 
         <Text style={styles.title}>Pair with your parent</Text>
         <Text style={styles.description}>
-          Ask your parent to open PearGuard and tap "Add Child" on their Dashboard. Then scan the QR code they show you.
+          Ask your parent to open 亲近守护 and tap "Add Child" on their Dashboard. Then scan the QR code they show you.
         </Text>
 
         {pairError && (

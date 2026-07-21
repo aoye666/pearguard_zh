@@ -1,9 +1,9 @@
 repository: https://github.com/peerloomllc/pearguard
 
-name: PearGuard
+name: 亲近守护
 summary: Peer-to-peer parental controls - manage screen time without a middleman
 description: |
-  PearGuard is a private, peer-to-peer parental control app. A parent device
+  亲近守护 is a private, peer-to-peer parental control app. A parent device
   manages screen time and app access on a child device directly, with no
   server, no account and no third party in the middle.
 

@@ -1,13 +1,13 @@
 // Turns a bypass/enforcement-offline `reason` into the text the PARENT sees.
 //
 // Every reason used to render the same Android-specific sentence (" turned
-// off the PearGuard Accessibility Service"), no matter what actually happened or
+// off the 亲近守护 Accessibility Service"), no matter what actually happened or
 // which platform the child was on. That's wrong in two directions:
 //
 //   - It's factually incorrect for a desktop child (there is no Accessibility
 //     Service on Windows or Linux).
 //   - Worse, it ACCUSES. Some reasons are not the child's doing at all — an
-//     unsupported Wayland compositor means PearGuard simply cannot enforce on
+//     unsupported Wayland compositor means 亲近守护 simply cannot enforce on
 //     that machine. Telling a parent their kid "turned off" protection when the
 //     app never worked there invites a punishment for something the child didn't
 //     do. Reasons that are the app's limitation must read as the app's problem.
@@ -15,7 +15,7 @@
 // The parent still needs to know enforcement is off in every case — that's the
 // whole point of the alert — but the wording has to match the cause.
 
-// Reasons that mean "PearGuard cannot enforce here", NOT "the child defeated it".
+// Reasons that mean "亲近守护 cannot enforce here", NOT "the child defeated it".
 // Kept exported so the UI can style/prioritise them differently from real tampering.
 const NON_TAMPER_REASONS = new Set([
   'linux:unsupported-compositor',
@@ -47,19 +47,19 @@ function describeBypassReason(reason, childName) {
     case 'accessibility_disabled':
       return {
         title: who + '的家长控制已禁用',
-        body: who + '关闭了 PearGuard 无障碍服务。',
+        body: who + '关闭了 亲近守护 无障碍服务。',
         tamper: true,
       }
     case 'device_admin_disabled':
       return {
         title: who + '的家长控制已禁用',
-        body: who + '移除了 PearGuard 的设备管理员权限。',
+        body: who + '移除了 亲近守护 的设备管理员权限。',
         tamper: true,
       }
     case 'force_stopped':
       return {
-        title: 'PearGuard 在' + who + '的设备上已停止',
-        body: who + '强制停止了 PearGuard。应用阻止功能未运行。',
+        title: '亲近守护 在' + who + '的设备上已停止',
+        body: who + '强制停止了 亲近守护。应用阻止功能未运行。',
         tamper: true,
       }
 
@@ -72,7 +72,7 @@ function describeBypassReason(reason, childName) {
     case 'accessibility_not_connected':
       return {
         title: '应用阻止已在' + who + '的设备上暂停',
-        body: 'PearGuard 的保护服务被设备停止，正在重新启动。阻止功能在重新连接之前处于非活跃状态——这不是'
+        body: '亲近守护 的保护服务被设备停止，正在重新启动。阻止功能在重新连接之前处于非活跃状态——这不是'
           + who + '的操作。',
         tamper: false,
       }
@@ -89,12 +89,12 @@ function describeBypassReason(reason, childName) {
         tamper: true,
       }
 
-    // --- PearGuard can't enforce here. NOT the child's fault. -----------------
+    // --- 亲近守护 can't enforce here. NOT the child's fault. -----------------
     case 'linux:unsupported-compositor':
       return {
         title: '应用阻止在' + who + '的电脑上无法正常工作',
-        body: 'PearGuard 无法在此 Linux 桌面上监控应用——其窗口系统不受支持。'
-          + '阻止功能在此问题解决前处于非活跃状态。这是 PearGuard 的限制，不是'
+        body: '亲近守护 无法在此 Linux 桌面上监控应用——其窗口系统不受支持。'
+          + '阻止功能在此问题解决前处于非活跃状态。这是 亲近守护 的限制，不是'
           + who + '的操作。',
         tamper: false,
       }
@@ -108,15 +108,15 @@ function describeBypassReason(reason, childName) {
     case 'linux:extension-out-of-date':
       return {
         title: '应用阻止已在' + who + '的电脑上关闭',
-        body: 'PearGuard 的应用阻止扩展与此电脑上的 GNOME 版本不兼容，'
-          + '因此阻止功能处于非活跃状态。需要更新 PearGuard——' + who + '没有进行此操作。',
+        body: '亲近守护 的应用阻止扩展与此电脑上的 GNOME 版本不兼容，'
+          + '因此阻止功能处于非活跃状态。需要更新 亲近守护——' + who + '没有进行此操作。',
         tamper: false,
       }
     case 'linux:extension-error':
       return {
         title: '应用阻止已在' + who + '的电脑上关闭',
-        body: 'PearGuard 的应用阻止扩展崩溃了，因此阻止功能处于非活跃状态。'
-          + '重启电脑通常可以解决此问题。这是 PearGuard 的故障，不是' + who + '的操作。',
+        body: '亲近守护 的应用阻止扩展崩溃了，因此阻止功能处于非活跃状态。'
+          + '重启电脑通常可以解决此问题。这是 亲近守护 的故障，不是' + who + '的操作。',
         tamper: false,
       }
     case 'linux:extension-missing':
@@ -124,8 +124,8 @@ function describeBypassReason(reason, childName) {
       // tell from here, so state the fact and assign no blame.
       return {
         title: '应用阻止已在' + who + '的电脑上关闭',
-        body: 'PearGuard 的应用阻止扩展缺失，因此阻止功能处于非活跃状态。'
-          + 'PearGuard 将尝试重新安装。',
+        body: '亲近守护 的应用阻止扩展缺失，因此阻止功能处于非活跃状态。'
+          + '亲近守护 将尝试重新安装。',
         tamper: false,
       }
 
@@ -133,7 +133,7 @@ function describeBypassReason(reason, childName) {
     case 'linux:extension-disabled':
       return {
         title: who + '的家长控制已禁用',
-        body: who + '关闭了 PearGuard 的应用阻止扩展。',
+        body: who + '关闭了 亲近守护 的应用阻止扩展。',
         tamper: true,
       }
 

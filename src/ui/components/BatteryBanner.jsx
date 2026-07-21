@@ -30,17 +30,17 @@ function BatteryHelpModal({ onAllow, onClose }) {
         <div style={{ textAlign: 'center' }}>
           <Icon name="Warning" size={32} color={AMBER} />
           <h2 style={{ ...typography.heading, color: colors.text.primary, marginTop: `${spacing.md}px`, marginBottom: `${spacing.sm}px` }}>
-            {t('Keep PearGuard running')}
+            {t('Keep 亲近守护 running')}
           </h2>
         </div>
         <p style={{ ...typography.body, color: colors.text.secondary, lineHeight: '1.6', marginTop: 0, marginBottom: `${spacing.md}px` }}>
-          {t('To keep monitoring your child\'s device, PearGuard needs to stay connected in the background. Battery saver and power management can shut it down.')}
+          {t('To keep monitoring your child\'s device, 亲近守护 needs to stay connected in the background. Battery saver and power management can shut it down.')}
         </p>
         <p style={{ ...typography.body, color: colors.text.primary, fontWeight: '600', marginBottom: `${spacing.xs}px` }}>
           1. {t('Allow background activity')}
         </p>
         <p style={{ ...typography.body, color: colors.text.secondary, lineHeight: '1.6', marginTop: 0, marginBottom: `${spacing.md}px` }}>
-          {t('Tap the button below and choose Allow when asked to let PearGuard run without battery restrictions.')}
+          {t('Tap the button below and choose Allow when asked to let 亲近守护 run without battery restrictions.')}
         </p>
         <p style={{ ...typography.body, color: colors.text.primary, fontWeight: '600', marginBottom: `${spacing.xs}px` }}>
           2. {t('Check your phone\'s extra settings')}
@@ -49,10 +49,10 @@ function BatteryHelpModal({ onAllow, onClose }) {
           {t('Some manufacturers add their own controls that you have to enable by hand:')}
         </p>
         <ul style={{ ...typography.body, color: colors.text.secondary, lineHeight: '1.6', marginTop: 0, marginBottom: `${spacing.xl}px`, paddingLeft: `${spacing.xl}px` }}>
-          <li>{t('Samsung: Settings > Battery > Background usage limits > remove PearGuard from "Sleeping apps".')}</li>
-          <li>{t('Xiaomi / Redmi / POCO: Settings > Apps > PearGuard > Autostart on, and set Battery saver to "No restrictions".')}</li>
+          <li>{t('Samsung: Settings > Battery > Background usage limits > remove 亲近守护 from "Sleeping apps".')}</li>
+          <li>{t('Xiaomi / Redmi / POCO: Settings > Apps > 亲近守护 > Autostart on, and set Battery saver to "No restrictions".')}</li>
           <li>{t('OnePlus / Oppo / Realme: Settings > Battery > allow background activity / disable "Sleep standby optimization".')}</li>
-          <li>{t('Huawei: Settings > Apps > PearGuard > Battery > turn off "Manage automatically" and allow background.')}</li>
+          <li>{t('Huawei: Settings > Apps > 亲近守护 > Battery > turn off "Manage automatically" and allow background.')}</li>
         </ul>
         <div style={{ display: 'flex', flexDirection: 'column', gap: `${spacing.sm}px` }}>
           <Button onClick={onAllow} style={{ width: '100%' }}>
@@ -113,7 +113,7 @@ export default function BatteryBanner() {
             {t('Battery saver may stop monitoring')}
           </p>
           <p style={{ ...typography.caption, color: colors.text.secondary, margin: 0 }}>
-            {t('Allow PearGuard to run in the background so it keeps reporting.')}
+            {t('Allow 亲近守护 to run in the background so it keeps reporting.')}
           </p>
         </div>
         <button

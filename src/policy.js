@@ -97,7 +97,7 @@ const MANDATORY_SCREEN_TIME_EXEMPT_PACKAGES = require('./mandatory-exempt.js')
 
 // Parent-chosen apps that don't count toward the device-wide screen-time
 // budget and stay usable once it's spent (#178). Distinct from the built-in
-// exemptions (PearGuard, phone/messaging, system shells), which the native
+// exemptions (亲近守护, phone/messaging, system shells), which the native
 // callers filter before we ever see them.
 function isScreenTimeExempt(packageName, policy) {
   // Mandatory exemptions — always on, not controllable by parent.
@@ -138,7 +138,7 @@ function effectiveScreenTimeLimitSeconds(policy, bonus, now) {
 // app with reported usage and compares to the policy's daily screen-time
 // budget. Unlike per-app/category limits this ignores which app is in the
 // foreground — once the total is spent, every non-exempt app is blocked.
-// Exemptions (PearGuard itself, phone/messaging, system shells) are handled
+// Exemptions (亲近守护 itself, phone/messaging, system shells) are handled
 // by the native callers, not here. Parent-chosen exempt apps (#178) are
 // subtracted from the total so their use never spends the shared budget.
 // A general-time grant (#179) raises the cap for the rest of today.

@@ -102,7 +102,7 @@ function CopyField({ value, hint }) {
 function shareApp() {
   window.callBare('haptic:tap');
   window.callBare('share:text', {
-    text: t('Check out PearGuard - a private, peer-to-peer parental control app with no servers or accounts.\n\nhttps://peerloomllc.com/pearguard/'),
+    text: t('Check out 亲近守护 - a private, peer-to-peer parental control app with no servers or accounts.\n\nhttps://peerloomllc.com/pearguard/'),
   });
 }
 
@@ -145,13 +145,13 @@ export default function AboutTab() {
   return (
     <div style={{ padding: `${spacing.base}px`, overflowY: 'auto', flex: 1 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: `${spacing.xs}px`, marginBottom: `${spacing.lg}px` }}>
-        <div style={{ fontSize: '20px', fontWeight: '600', color: colors.text.primary }}>{t('PearGuard')}</div>
+        <div style={{ fontSize: '20px', fontWeight: '600', color: colors.text.primary }}>{t('亲近守护')}</div>
         <div style={{ fontSize: '12px', color: colors.text.muted }}>{t('Private. Peer-to-Peer. No Servers.')}</div>
       </div>
 
       <Collapsible title={t('How it works')} icon="Info" open={howOpen} onToggle={() => setHowOpen(v => !v)} maxHeight="240px" {...collapsibleProps}>
         <p style={bodyStyle}>
-          {t('PearGuard connects parent and child devices directly using peer-to-peer technology. Your data never touches a server - policies, usage reports, and requests stay between your devices. No accounts. No subscriptions. No data collection.')}
+          {t('亲近守护 connects parent and child devices directly using peer-to-peer technology. Your data never touches a server - policies, usage reports, and requests stay between your devices. No accounts. No subscriptions. No data collection.')}
         </p>
         <Button variant="accent" onClick={() => openURL('https://pears.com/')} style={fullWidth}>
           {t('Learn about P2P')} <Icon name="ArrowSquareOut" size={14} color="#000000" />
@@ -169,7 +169,7 @@ export default function AboutTab() {
 
       <Collapsible title={t('Support development')} icon="Lightning" open={valueOpen} onToggle={() => setValueOpen(v => !v)} maxHeight="200px" {...collapsibleProps}>
         <p style={bodyStyle}>
-          {t('PearGuard is free and open source. If you receive value from it, please consider returning value.')}
+          {t('亲近守护 is free and open source. If you receive value from it, please consider returning value.')}
         </p>
         <div style={{ display: 'flex', gap: `${spacing.sm}px` }}>
           <Button variant="accent" onClick={handleDonateBTC} style={flexOne}>
@@ -192,10 +192,10 @@ export default function AboutTab() {
 
       <Collapsible title={t('Share the app')} icon="ShareNetwork" open={shareOpen} onToggle={() => setShareOpen(v => !v)} maxHeight="200px" {...collapsibleProps}>
         <p style={bodyStyle}>
-          {t('Know someone who could use private, serverless parental controls? Share PearGuard with them.')}
+          {t('Know someone who could use private, serverless parental controls? Share 亲近守护 with them.')}
         </p>
         <Button variant="accent" onClick={shareApp} style={fullWidth}>
-          <Icon name="ShareNetwork" size={16} color="#000000" /> {t('Share PearGuard')}
+          <Icon name="ShareNetwork" size={16} color="#000000" /> {t('Share 亲近守护')}
         </Button>
       </Collapsible>
 
@@ -203,7 +203,7 @@ export default function AboutTab() {
         <div style={{ display: 'flex', gap: `${spacing.sm}px`, justifyContent: 'center' }}>
           <Button
             variant="accent"
-            onClick={() => openURL('mailto:peerloomllc@proton.me?subject=%5BPearGuard%5D%20Feedback')}
+            onClick={() => openURL('mailto:peerloomllc@proton.me?subject=%5B亲近守护%5D%20Feedback')}
           >
             <Icon name="EnvelopeSimple" size={14} color="#000000" /> {t('Send Email')} <Icon name="ArrowSquareOut" size={13} color="#000000" />
           </Button>
@@ -229,7 +229,7 @@ export default function AboutTab() {
           {(close) => (
             <>
               <p style={{ lineHeight: '1.7', textAlign: 'center', marginTop: 0, marginBottom: `${spacing.base}px` }}>
-                Support PearGuard with Bitcoin over Lightning (fast and low-fee)
+                Support 亲近守护 with Bitcoin over Lightning (fast and low-fee)
                 {BTC_ONCHAIN_ADDRESS ? ' or on-chain' : ''}.
               </p>
 

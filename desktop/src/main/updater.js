@@ -7,14 +7,14 @@ const { exec } = require('child_process')
 // that a critical fix lands within the same school day a release ships.
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
-// The watchdog Windows Service relaunches PearGuard.exe within ~60s of it
+// The watchdog Windows Service relaunches 亲近守护.exe within ~60s of it
 // dying. During an in-place upgrade, NSIS' customUnInit stops this service
 // itself, but there's a race window between autoUpdater quitting the app and
 // the new installer firing customUnInit where the watchdog could relaunch
-// PearGuard and trigger the "cannot close, please close manually" loop.
+// 亲近守护 and trigger the "cannot close, please close manually" loop.
 // Stopping it ahead of quitAndInstall closes that window. The new installer's
 // customInstall recreates the service so this is self-healing.
-const WATCHDOG_SVC = 'PearGuardWatchdogSvc'
+const WATCHDOG_SVC = '亲近守护WatchdogSvc'
 
 function stopWatchdog() {
   // No watchdog service on non-Windows platforms — autostart on Linux is a
@@ -40,9 +40,9 @@ function initAutoUpdater({ getMainWindow }) {
     const win = getMainWindow()
     const { response } = await dialog.showMessageBox(win || undefined, {
       type: 'info',
-      title: 'PearGuard update available',
-      message: `PearGuard ${info.version} is available.`,
-      detail: `You're currently on ${app.getVersion()}. PearGuard will close briefly to install the update.`,
+      title: '亲近守护 update available',
+      message: `亲近守护 ${info.version} is available.`,
+      detail: `You're currently on ${app.getVersion()}. 亲近守护 will close briefly to install the update.`,
       buttons: ['Update now', 'Later'],
       defaultId: 0,
       cancelId: 1,

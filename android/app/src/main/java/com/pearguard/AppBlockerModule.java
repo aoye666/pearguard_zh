@@ -560,7 +560,7 @@ public class AppBlockerModule extends AccessibilityService {
         if (pkg == null) return;
         String packageName = pkg.toString();
 
-        // Never block PearGuard itself.
+        // Never block 亲近守护 itself.
         // Do NOT call dismissOverlay() here — adding our own overlay fires
         // TYPE_WINDOW_STATE_CHANGED with our package name, and dismissing
         // would remove the overlay we just added (flash loop). The overlay
@@ -680,7 +680,7 @@ public class AppBlockerModule extends AccessibilityService {
      * to allow a one-off exception is worse UX than letting the override win.
      */
     private String getBlockReason(String packageName) {
-        // Exemptions: system services, phone/messaging, and PearGuard itself
+        // Exemptions: system services, phone/messaging, and 亲近守护 itself
         // are never blocked — otherwise global lock would lock the child out
         // of the app they need to see the block reason / request overrides.
         if (packageName == null) return null;
@@ -1072,9 +1072,9 @@ public class AppBlockerModule extends AccessibilityService {
     /**
      * Total foreground screen time in seconds across all non-exempt packages
      * today, computed in a single event scan. Backs the device-wide
-     * cumulative screen-time cap. Exempt packages (PearGuard itself,
+     * cumulative screen-time cap. Exempt packages (亲近守护 itself,
      * phone/messaging, system overlays, plus the parent's screenTimeExemptApps)
-     * are skipped so a call or the PearGuard app never counts against the
+     * are skipped so a call or the 亲近守护 app never counts against the
      * budget — mirroring the exemptions in getBlockReason.
      */
     private int getTotalDailyUsageSeconds(JSONObject policy) {
@@ -2255,7 +2255,7 @@ public class AppBlockerModule extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "PearGuard Enforcement Warning",
+                    "亲近守护 Enforcement Warning",
                     NotificationManager.IMPORTANCE_HIGH
             );
             channel.setDescription("Alerts when enforcement is disabled");
@@ -2281,7 +2281,7 @@ public class AppBlockerModule extends AccessibilityService {
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("PearGuard enforcement disabled")
+                .setContentTitle("亲近守护 enforcement disabled")
                 .setContentText("Tap to re-enable parental controls in Accessibility settings.")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true)

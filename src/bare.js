@@ -811,7 +811,7 @@ async function _handlePeerMessage (msg, conn, remoteKeyHex) {
       // Android reasons, so every desktop reason fell through to the raw string
       // and the parent read a literal "linux:extension-not-loaded". Worse, all
       // of them were typed 'bypass' — a red "Bypass Attempt" badge — including
-      // the reasons that are PearGuard's own failure and not the child's doing.
+      // the reasons that are 亲近守护's own failure and not the child's doing.
       // describeBypassReason is the single source of truth for both the wording
       // and whether this is really tampering; the notification already used it.
       const described = describeBypassReason(reason, childDisplayName)
@@ -1275,7 +1275,7 @@ async function handleHello (msg, conn, remoteKeyHex) {
     const myIdentityHex = b4a.toString(identity.publicKey, 'hex')
     const profileRaw = await db.get('profile').catch(() => null)
     const myProfile = profileRaw ? profileRaw.value : {}
-    const myDisplayName = myProfile.displayName || 'PearGuard Device'
+    const myDisplayName = myProfile.displayName || '亲近守护 Device'
     const myAvatarThumb = myProfile.avatar
       ? (myProfile.avatar.type === 'preset' ? 'preset:' + myProfile.avatar.id
         : myProfile.avatar.mime ? 'mime:' + myProfile.avatar.mime + ';' + (myProfile.avatar.base64 || myProfile.avatar.thumb64 || '')
@@ -1388,7 +1388,7 @@ async function handleHello (msg, conn, remoteKeyHex) {
 // ── Storage: breakdown, analyze, reclaim ──────────────────────────────────────
 //
 // Ported from PearCal (see p2p-wiki/wiki/concepts/hyperbee-bloat-and-reclaim.md).
-// PearGuard is single-core (no Autobase) and no replication: the local Hyperbee
+// 亲近守护 is single-core (no Autobase) and no replication: the local Hyperbee
 // is not shared via swarm, so closing/swapping `core` is safe without tearing
 // down hyperswarm connections.
 

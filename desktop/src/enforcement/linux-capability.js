@@ -1,4 +1,4 @@
-// Decides whether PearGuard can actually enforce on this Linux session — and,
+// Decides whether 亲近守护 can actually enforce on this Linux session — and,
 // if it can't, says so out loud instead of pretending.
 //
 // Why this exists: on Wayland, xprop/active-win is blind to Wayland-native
@@ -56,7 +56,7 @@ function assessLinuxEnforcement({
       ok: false,
       reason: REASON_UNSUPPORTED,
       childMessage: {
-        title: "PearGuard can't block apps on this desktop",
+        title: "亲近守护 can't block apps on this desktop",
         body: 'This Linux desktop\'s window system is not supported, so app blocking is inactive. '
           + 'Your parent has been notified.',
       },
@@ -70,7 +70,7 @@ function assessLinuxEnforcement({
       ok: false,
       reason: REASON_NOT_LOADED,
       childMessage: {
-        title: 'PearGuard needs you to log out',
+        title: '亲近守护 needs you to log out',
         body: 'Log out and log back in to finish enabling app blocking. It is inactive until then.',
       },
     }
@@ -84,7 +84,7 @@ function assessLinuxEnforcement({
       ok: false,
       reason: REASON_NOT_LOADED,
       childMessage: {
-        title: 'PearGuard needs you to log out',
+        title: '亲近守护 needs you to log out',
         body: 'Log out and log back in to finish enabling app blocking. It is inactive until then.',
       },
     }

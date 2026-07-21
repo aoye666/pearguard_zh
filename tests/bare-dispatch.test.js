@@ -831,7 +831,7 @@ describe('bare dispatch', () => {
   // "linux:extension-disabled", each badged red as a "Bypass Attempt". The label
   // came from a hardcoded map of the five Android reasons, so every desktop
   // reason fell through to the raw slug; and every reason was typed 'bypass',
-  // which accuses the child even when PearGuard is the thing that failed.
+  // which accuses the child even when 亲近守护 is the thing that failed.
   // Relabelling on READ fixes the rows already stored, not just new ones.
   describe('alerts:list relabels stored bypass alerts', () => {
     function makeAlertDb (alerts) {

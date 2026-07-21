@@ -36,7 +36,7 @@ export default function ChildInviteCard({ onConnected, onDismiss }) {
     if (!invite?.inviteLink) return;
     window.callBare('haptic:tap');
     window.callBare('share:text', {
-      text: t('Tap this link on the parent device to pair with PearGuard:\n\n{link}', { link: invite.inviteLink }),
+      text: t('Tap this link on the parent device to pair with 亲近守护:\n\n{link}', { link: invite.inviteLink }),
     });
   };
 

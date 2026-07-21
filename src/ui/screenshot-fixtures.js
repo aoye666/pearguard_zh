@@ -2,7 +2,7 @@
 // set before this bundle runs. Replaces window.callBare with canned responses and
 // freezes "now" to FROZEN_NOW so rendered timestamps are deterministic.
 //
-// PearGuard's UI calls window.callBare(method, args) directly (there is no shared
+// 亲近守护's UI calls window.callBare(method, args) directly (there is no shared
 // db/sync/notifs object like PearCal), so fixtures work by installing a fake
 // callBare that dispatches on method name to canned data.
 //

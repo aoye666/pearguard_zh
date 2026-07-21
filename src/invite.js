@@ -1,6 +1,6 @@
 // src/invite.js
 //
-// Invite link builder and parser for PearGuard.
+// Invite link builder and parser for 亲近守护.
 //
 // Invite payload: { p: hex(32 bytes pubkey), t: hex(32 bytes topic), r: 'p' | 'c' }
 //   r = 'p' → invite is parent-hosted (p is parentPublicKey). Legacy default.

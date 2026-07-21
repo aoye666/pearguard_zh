@@ -74,7 +74,7 @@ export default function InviteCard({ onConnected, onDismiss }) {
       const inv = await ensureInvite();
       if (!inv?.inviteLink) return;
       await window.callBare('share:text', {
-        text: t('Tap this link on the child device to pair with PearGuard:\n\n{link}', { link: inv.inviteLink }),
+        text: t('Tap this link on the child device to pair with 亲近守护:\n\n{link}', { link: inv.inviteLink }),
       });
     } catch {
       setError(t('Failed to generate invite. Please try again.'));
@@ -175,7 +175,7 @@ export default function InviteCard({ onConnected, onDismiss }) {
         {scanState === 'idle' && (
           <>
             <p style={{ ...typography.caption, color: colors.text.secondary, margin: 0, marginBottom: `${spacing.base}px`, textAlign: 'center' }}>
-              {t('Ask your child to open PearGuard and tap "Show My QR Code", then scan it here.')}
+              {t('Ask your child to open 亲近守护 and tap "Show My QR Code", then scan it here.')}
             </p>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: `${spacing.sm}px` }}>
               <Button icon="QrCode" onClick={() => { window.callBare('haptic:tap'); handleScan(); }}>

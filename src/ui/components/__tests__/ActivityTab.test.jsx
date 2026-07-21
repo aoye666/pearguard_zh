@@ -5,7 +5,7 @@ import ActivityTab from '../ActivityTab.jsx';
 const NOW = Date.now();
 
 // One of each shape the feed can hold: a real tamper alert, a capability failure
-// (PearGuard's fault, not the child's), a resolved request and a PENDING request.
+// (亲近守护's fault, not the child's), a resolved request and a PENDING request.
 const MOCK_ACTIVITY = [
   {
     id: 'bypass:1', type: 'bypass', timestamp: NOW - 1000,

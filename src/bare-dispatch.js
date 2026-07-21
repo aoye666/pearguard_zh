@@ -85,7 +85,7 @@ function applyExclusionsToReport(report, exclusions) {
 //
 // Applied on read so alerts already in Hyperbee are shown correctly: the rows
 // written before this existed are labelled with the raw reason slug and are all
-// typed 'bypass', which paints "PearGuard's extension didn't load" as a red
+// typed 'bypass', which paints "亲近守护's extension didn't load" as a red
 // Bypass Attempt by the child. describeBypassReason owns both decisions.
 function relabelAlert(alert) {
   const described = describeBypassReason(alert.reason, alert.childDisplayName)
@@ -1981,7 +1981,7 @@ function createDispatch (ctx) {
           }
           // Rows written before the label fix carry the raw reason slug as their
           // display text ("linux:extension-disabled") and are all typed 'bypass',
-          // which badges a PearGuard failure as a red Bypass Attempt. Re-derive
+          // which badges a 亲近守护 failure as a red Bypass Attempt. Re-derive
           // both from the reason on read, so history reads correctly too.
           results.push(value.reason ? relabelAlert(value) : value)
         }

@@ -33,10 +33,10 @@ function WelcomeCard({ onDismiss }) {
       }}>
         <Icon name="Shield" size={36} color={colors.primary} />
         <h2 style={{ ...typography.heading, color: colors.text.primary, marginTop: `${spacing.md}px`, marginBottom: `${spacing.sm}px` }}>
-          Welcome to PearGuard
+          Welcome to 亲近守护
         </h2>
         <p style={{ ...typography.body, color: colors.text.secondary, lineHeight: '1.5', marginTop: 0, marginBottom: `${spacing.xl}px` }}>
-          Your parent uses PearGuard to help manage screen time on this device. Once you pair with them, we'll show you around.
+          Your parent uses 亲近守护 to help manage screen time on this device. Once you pair with them, we'll show you around.
         </p>
         <Button onClick={onDismiss} style={{ width: '100%' }}>
           Got it

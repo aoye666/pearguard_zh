@@ -12,7 +12,7 @@ import { useRouter } from 'expo-router'
 import * as DocumentPicker from 'expo-document-picker'
 import * as FileSystem from 'expo-file-system/legacy'
 import NativeIcon from './NativeIcon'
-import { validatePin, MAX_PIN_LENGTH } from '../src/pin-rules'
+import { validatePin, MIN_PIN_LENGTH, MAX_PIN_LENGTH } from '../src/pin-rules'
 import { colors, spacing, radius, typography, fontFamily } from '../src/rn-theme'
 
 let _callBare: ((method: string, args: any) => Promise<any>) | null = null
@@ -120,7 +120,7 @@ export default function SetupScreen () {
         <Text style={styles.subtitle}>
           您的家长身份、已配对的儿童设备以及管理规则已恢复。
           {'\n\n'}
-          请强制关闭 PearGuard 并重新打开以完成恢复状态的加载。
+          请强制关闭 亲近守护 并重新打开以完成恢复状态的加载。
         </Text>
       </View>
     )
@@ -238,7 +238,7 @@ export default function SetupScreen () {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>欢迎使用 PearGuard</Text>
+      <Text style={styles.title}>欢迎使用 亲近守护</Text>
       <Text style={styles.subtitle}>您将如何使用此设备？</Text>
 
       {error && <Text style={styles.error}>{error}</Text>}

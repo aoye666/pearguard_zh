@@ -9,7 +9,7 @@ const nav = (target) => () => window.__pearTourNavigate?.(target);
 
 export const PARENT_TOUR_SLIDES = [
   {
-    title: t('Welcome to PearGuard'),
+    title: t('Welcome to 亲近守护'),
     body: t('A private parental control app that runs peer-to-peer between your device and your child\'s. No servers, no accounts, no data collected.'),
     navigate: nav('dashboard'),
   },

@@ -90,7 +90,7 @@ class OverlayManager extends EventEmitter {
       minimizable: false,
       maximizable: false,
       resizable: false,
-      title: 'PearGuard',
+      title: '亲近守护',
       webPreferences: {
         preload: path.join(this._rendererDir, 'overlay-preload.js'),
         contextIsolation: true,

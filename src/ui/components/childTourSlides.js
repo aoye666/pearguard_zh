@@ -8,8 +8,8 @@ const nav = (target) => () => window.__pearTourNavigate?.(target);
 
 export const CHILD_TOUR_SLIDES = [
   {
-    title: t('Welcome to PearGuard'),
-    body: t('Your parent uses PearGuard to help manage screen time on this device. This app shows you what\'s happening and lets you ask for more time when you need it.'),
+    title: t('Welcome to 亲近守护'),
+    body: t('Your parent uses 亲近守护 to help manage screen time on this device. This app shows you what\'s happening and lets you ask for more time when you need it.'),
     navigate: nav('home'),
   },
   {

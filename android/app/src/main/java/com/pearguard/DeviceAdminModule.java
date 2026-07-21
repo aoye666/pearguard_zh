@@ -23,14 +23,14 @@ public class DeviceAdminModule extends DeviceAdminReceiver {
 
     @Override
     public void onEnabled(Context context, Intent intent) {
-        Toast.makeText(context, "PearGuard: device admin enabled", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "亲近守护: device admin enabled", Toast.LENGTH_SHORT).show();
     }
 
     @Override
     public CharSequence onDisableRequested(Context context, Intent intent) {
         // This string is shown in the confirmation dialog when the user tries to
         // remove device admin status. Make it clear that parental controls will stop.
-        return "Removing device admin will disable all PearGuard enforcement. " +
+        return "Removing device admin will disable all 亲近守护 enforcement. " +
             "A parent PIN is required to confirm.";
     }
 

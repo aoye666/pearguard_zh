@@ -125,7 +125,7 @@ public class EnforcementService extends Service {
 
     /**
      * Writes the current timestamp to SharedPreferences on every loop tick.
-     * When PearGuard is force-stopped, onDestroy() is never called so this
+     * When 亲近守护 is force-stopped, onDestroy() is never called so this
      * timestamp goes stale, allowing startup detection of a force-stop event.
      */
     private void writeEnforcementHeartbeat() {
@@ -189,7 +189,7 @@ public class EnforcementService extends Service {
     }
 
     /**
-     * Checks whether the PearGuard Accessibility Service is both enabled AND
+     * Checks whether the 亲近守护 Accessibility Service is both enabled AND
      * actually enforcing.
      *
      * Two distinct failure modes are caught:
