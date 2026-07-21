@@ -93,11 +93,16 @@ function hasExceededCategoryLimit(packageName, policy, usageStats) {
   return total >= categoryPolicy.dailyLimitSeconds
 }
 
+const MANDATORY_SCREEN_TIME_EXEMPT_PACKAGES = require('./mandatory-exempt.js')
+
 // Parent-chosen apps that don't count toward the device-wide screen-time
 // budget and stay usable once it's spent (#178). Distinct from the built-in
 // exemptions (PearGuard, phone/messaging, system shells), which the native
 // callers filter before we ever see them.
 function isScreenTimeExempt(packageName, policy) {
+  // Mandatory exemptions — always on, not controllable by parent.
+  // Checked first so we never return false for QQ/WeChat, even with null policy.
+  if (MANDATORY_SCREEN_TIME_EXEMPT_PACKAGES.includes(packageName)) return true
   if (!policy) return false
   const exempt = policy.screenTimeExemptApps
   return Array.isArray(exempt) && exempt.includes(packageName)
@@ -284,6 +289,7 @@ module.exports = {
   hasExceededCategoryLimit,
   hasExceededScreenTimeLimit,
   isScreenTimeExempt,
+  MANDATORY_SCREEN_TIME_EXEMPT_PACKAGES,
   effectiveScreenTimeLimitSeconds,
   bonusSecondsForToday,
   localDateKey,

@@ -198,10 +198,18 @@ function evaluate({
   return null
 }
 
+// Packages that are ALWAYS exempt — essential communication tools that
+// should never be blocked by a screen-time limit.
+const MANDATORY_SCREEN_TIME_EXEMPT = new Set([
+  'com.tencent.mm',       // 微信
+  'com.tencent.mobileqq', // QQ
+])
+
 // Parent-chosen apps that don't count toward the device-wide screen-time
 // budget and stay usable once it's spent (#178).
 function isScreenTimeExempt(policy, packageName) {
   if (!packageName) return false
+  if (MANDATORY_SCREEN_TIME_EXEMPT.has(packageName)) return true
   const exempt = policy.screenTimeExemptApps
   return Array.isArray(exempt) && exempt.includes(packageName)
 }

@@ -151,6 +151,7 @@ export default {
   'No days': '未选择日期',
   ' exempt app': ' 个豁免应用',
   ' exempt apps': ' 个豁免应用',
+  'Always exempt': '始终豁免',
 
   // ── 活动 / Activity ─────────────────────────────────────────────────────────
   'Activity': '活动',

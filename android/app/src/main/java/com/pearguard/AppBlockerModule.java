@@ -225,6 +225,14 @@ public class AppBlockerModule extends AccessibilityService {
     // Cleared via clearPendingRequest() when a parent decision arrives via setPolicy().
     private static final Set<String> pendingRequestPackages = new HashSet<>();
 
+    // Packages that are ALWAYS exempt from the device-wide screen-time cap,
+    // regardless of the parent's screenTimeExemptApps selection. QQ and WeChat
+    // are essential communication tools that should never be time-limited.
+    private static final Set<String> MANDATORY_EXEMPT = new HashSet<>(java.util.Arrays.asList(
+        "com.tencent.mm",       // 微信
+        "com.tencent.mobileqq"  // QQ
+    ));
+
     /** Called from UsageStatsModule.setPolicy() when a parent decision arrives. */
     public static void clearPendingRequest(String packageName) {
         pendingRequestPackages.remove(packageName);
@@ -1044,11 +1052,15 @@ public class AppBlockerModule extends AccessibilityService {
 
     /**
      * True if the parent marked this package exempt from the device-wide
-     * screen-time cap (#178). Exempt apps neither spend the shared budget nor
-     * get blocked once it's gone, but their own per-app limit still applies.
+     * screen-time cap (#178), or if it is a mandatory exemption (QQ, WeChat).
+     * Exempt apps neither spend the shared budget nor get blocked once it's
+     * gone, but their own per-app limit still applies.
      */
     static boolean isScreenTimeExempt(JSONObject policy, String packageName) {
-        if (policy == null || packageName == null) return false;
+        if (packageName == null) return false;
+        // Mandatory exemptions — always on, not controllable by parent
+        if (MANDATORY_EXEMPT.contains(packageName)) return true;
+        if (policy == null) return false;
         JSONArray exempt = policy.optJSONArray("screenTimeExemptApps");
         if (exempt == null) return false;
         for (int i = 0; i < exempt.length(); i++) {

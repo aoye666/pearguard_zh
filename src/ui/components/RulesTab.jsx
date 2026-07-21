@@ -5,6 +5,7 @@ import { useTheme } from '../theme.js';
 import Icon from '../icons.js';
 import { APP_CATEGORIES, CATEGORY_COLORS } from './appCategories.js';
 import PresetModal from './PresetModal.jsx';
+import MANDATORY_EXEMPT from '../../mandatory-exempt.js';
 
 const DAY_LABELS = [t('rules.sun'), t('rules.mon'), t('rules.tue'), t('rules.wed'), t('rules.thu'), t('rules.fri'), t('rules.sat')];
 
@@ -29,9 +30,13 @@ function groupAppsByCategory(policy) {
   return { appsByCategory: grouped, totalAppCount: total };
 }
 
-function ExemptCategoryGroup({ categoryName, apps, exemptSet, onToggle, onSelectAll, onClear, expanded, onToggleExpanded, colors, typography, spacing, radius }) {
+function ExemptCategoryGroup({ categoryName, apps, exemptSet, mandatoryExemptSet, onToggle, onSelectAll, onClear, expanded, onToggleExpanded, colors, typography, spacing, radius }) {
   const color = CATEGORY_COLORS[categoryName] || '#aaa';
   const selectedCount = apps.reduce((n, a) => n + (exemptSet.has(a.packageName) ? 1 : 0), 0);
+  // Count mandatory exempt apps in this category
+  const mandatoryExemptCount = mandatoryExemptSet
+    ? apps.reduce((n, a) => n + (mandatoryExemptSet.has(a.packageName) ? 1 : 0), 0)
+    : 0;
   const allSelected = selectedCount === apps.length;
 
   return (
@@ -100,17 +105,30 @@ function ExemptCategoryGroup({ categoryName, apps, exemptSet, onToggle, onSelect
               {t('common.clear')}
             </button>
           </div>
-          {apps.map(({ packageName, appName }) => (
-            <label key={packageName} style={{ display: 'flex', alignItems: 'center', gap: `${spacing.sm}px`, ...typography.caption, color: colors.text.primary, cursor: 'pointer' }}>
+          {apps.map(({ packageName, appName }) => {
+            const isMandatory = mandatoryExemptSet && mandatoryExemptSet.has(packageName);
+            const checked = isMandatory || exemptSet.has(packageName);
+            return (
+            <label
+              key={packageName}
+              style={{
+                display: 'flex', alignItems: 'center', gap: `${spacing.sm}px`,
+                ...typography.caption,
+                color: isMandatory ? colors.text.muted : colors.text.primary,
+                cursor: isMandatory ? 'default' : 'pointer',
+              }}
+            >
               <input
                 type="checkbox"
-                checked={exemptSet.has(packageName)}
+                checked={checked}
+                disabled={isMandatory}
                 onChange={() => onToggle(packageName)}
-                aria-label={`Exempt ${appName}`}
+                aria-label={`Exempt ${appName}${isMandatory ? ' (always exempt)' : ''}`}
               />
-              {appName}
+              {appName}{isMandatory ? <span style={{ fontSize: '10px', color: colors.text.muted }}> ({t('Always exempt')})</span> : null}
             </label>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -193,13 +211,21 @@ function ScreenTimeSection({ policy, setPolicy, childPublicKey, colors, typograp
     setMinutes(savedSeconds ? String(Math.round(savedSeconds / 60)) : '');
   }, [savedSeconds]);
 
+  // Memoize the set of mandatory exempt packages so the UI can disable their toggles.
+  const mandatoryExemptSet = useMemo(() => new Set(MANDATORY_EXEMPT), []);
+
   function saveExempt(next) {
-    const updated = { ...policy, screenTimeExemptApps: next };
+    // Always merge mandatory packages so they can never be removed.
+    const merged = new Set(next);
+    for (const pkg of MANDATORY_EXEMPT) merged.add(pkg);
+    const updated = { ...policy, screenTimeExemptApps: Array.from(merged) };
     setPolicy(updated);
     window.callBare('policy:update', { childPublicKey, policy: updated });
   }
 
   function toggleExemptApp(packageName) {
+    // Mandatory packages cannot be toggled off.
+    if (MANDATORY_EXEMPT.includes(packageName)) return;
     saveExempt(
       exemptSet.has(packageName)
         ? exemptApps.filter((p) => p !== packageName)
@@ -215,7 +241,8 @@ function ScreenTimeSection({ policy, setPolicy, childPublicKey, colors, typograp
 
   function clearCategory(categoryName) {
     const pkgs = new Set((appsByCategory[categoryName] || []).map((a) => a.packageName));
-    saveExempt(exemptApps.filter((p) => !pkgs.has(p)));
+    // Keep mandatory packages — they stay exempt even if parent clears everything.
+    saveExempt(exemptApps.filter((p) => !pkgs.has(p) || MANDATORY_EXEMPT.includes(p)));
   }
 
   function save(nextMinutes) {
@@ -340,6 +367,7 @@ function ScreenTimeSection({ policy, setPolicy, childPublicKey, colors, typograp
                   categoryName={cat}
                   apps={appsByCategory[cat]}
                   exemptSet={exemptSet}
+                  mandatoryExemptSet={mandatoryExemptSet}
                   onToggle={toggleExemptApp}
                   onSelectAll={() => selectAllInCategory(cat)}
                   onClear={() => clearCategory(cat)}

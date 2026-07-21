@@ -227,6 +227,66 @@ function makeDate(dayOfWeek, hour, minute) {
   )
 }
 
+// mandatory screen-time exempt packages (QQ, WeChat)
+{
+  const policy = {
+    dailyScreenTimeLimitSeconds: 3600,
+    screenTimeExemptApps: [], // parent chose nothing
+  }
+
+  assert.strictEqual(isScreenTimeExempt('com.tencent.mm', policy), true, 'WeChat is always exempt')
+  assert.strictEqual(isScreenTimeExempt('com.tencent.mobileqq', policy), true, 'QQ is always exempt')
+  assert.strictEqual(isScreenTimeExempt('com.tencent.mm', null), true, 'WeChat exempt even with null policy')
+  assert.strictEqual(isScreenTimeExempt('com.tencent.mobileqq', {}), true, 'QQ exempt even with empty policy')
+
+  // Mandatory exempt apps stay usable after the cap is reached.
+  const spent = {
+    'com.a': { dailySeconds: 3600 },
+    'com.tencent.mm': { dailySeconds: 5000 },
+    'com.tencent.mobileqq': { dailySeconds: 3000 },
+  }
+
+  // Exempt usage must not count toward the cap.
+  assert.strictEqual(
+    hasExceededScreenTimeLimit(policy, {
+      'com.a': { dailySeconds: 100 },
+      'com.tencent.mm': { dailySeconds: 5000 },
+    }),
+    false,
+    'mandatory exempt usage excluded from total'
+  )
+
+  const now = makeDate(1, 12, 0)
+  assert.strictEqual(
+    isAppBlocked('com.tencent.mm', policy, spent, now),
+    false,
+    'WeChat allowed after cap reached'
+  )
+  assert.strictEqual(
+    isAppBlocked('com.tencent.mobileqq', policy, spent, now),
+    false,
+    'QQ allowed after cap reached'
+  )
+  assert.strictEqual(
+    isAppBlocked('com.a', policy, spent, now),
+    true,
+    'non-exempt still blocked after cap reached'
+  )
+
+  // Per-app limit still applies to mandatory exempt apps.
+  const withAppLimit = {
+    ...policy,
+    apps: { 'com.tencent.mm': { dailyLimitSeconds: 1800 } },
+  }
+  assert.strictEqual(
+    isAppBlocked('com.tencent.mm', withAppLimit, {
+      'com.tencent.mm': { dailySeconds: 1800 },
+    }, now),
+    true,
+    'WeChat still blocked by its own per-app limit'
+  )
+}
+
 // general-time bonus (#179)
 {
   const today = new Date(2026, 6, 9, 12, 0, 0)
